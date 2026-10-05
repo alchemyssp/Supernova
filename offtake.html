@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Off-take</title>
+<link rel="icon" href="img/logo-64.png">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600&family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=1">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="js/config.js?v=1"></script>
+<script src="js/common.js?v=1"></script>
+</head>
+<body>
+<main>
+  <h1>Off-take</h1>
+  <p class="sub">All wholesalers together, one row per outlet × SKU × month — the same columns as "Data_Total Off-Take".</p>
+
+  <div class="card">
+    <div class="row">
+      <div><label for="mFrom">From month</label><select id="mFrom"></select></div>
+      <div><label for="mTo">To month</label><select id="mTo"></select></div>
+      <div><label for="fWs">Wholesaler</label><select id="fWs"></select></div>
+      <div><label for="fTeam">Current Team</label><select id="fTeam"></select></div>
+      <div><label for="fBde">Current BDE</label><select id="fBde"></select></div>
+      <div><label for="fQ">Search</label><input type="search" id="fQ" placeholder="Outlet, code, product, brand"></div>
+      <div style="flex:0 0 auto"><button class="btn" id="exp" type="button">Export Excel</button></div>
+    </div>
+    <div class="bar" id="expBar" style="margin-top:12px" hidden><i></i></div>
+  </div>
+
+  <div class="grid kpis" id="kpis"></div>
+
+  <div class="card">
+    <div class="tbl-wrap"><table id="tbl"></table></div>
+    <div class="row" style="margin-top:12px;justify-content:space-between;align-items:center">
+      <div class="muted" id="pageInfo"></div>
+      <div style="flex:0 0 auto"><button class="btn gray small" id="prev">Previous</button> <button class="btn gray small" id="next">Next</button></div>
+    </div>
+  </div>
+</main>
+
+<script>
+/* [Excel header, view column, kind] in the order of "Data_Total Off-Take" */
+const COLS = [
+  ['Code', 'code'], ['Outlets', 'outlets'], ['Group', 'group_name'], ['Current Team', 'current_team'], ['Current BDE', 'current_bde'],
+  ['BDE', 'bde'], ['Area', 'area'], ['Wholesaler', 'wholesaler'], ['SKU Company', 'sku_company'], ['SKU Code', 'sku_code'],
+  ['Principle', 'principle'], ['Category', 'category'], ['Brand', 'brand'], ['Product', 'product'], ['Size', 'size'],
+  ['Packing', 'packing', 'n'], ['Price INC.VAT', 'price_inc', 'm'], ['Price EXC.VAT', 'price_exc', 'm'], ['Vol. Btls.', 'vol_btls', 'n'],
+  ['Total Price Inc.VAT', 'total_inc', 'm'], ['Total Price Exc.VAT', 'total_exc', 'm'], ['Direct Price Exc.VAT', 'direct_price_exc', 'm'],
+  ['Total Direct Price Exc.VAT', 'total_direct_exc', 'm'], ['Received Month', 'received_month', 'd'], ['Liter', 'liter', 'm']
+];
+const PAGE = 100;
+let OPT = null, page = 0, total = 0;
+
+(async () => {
+  if (!await requireLogin()) return;
+  renderNav();
+  const { data, error } = await sb.rpc('offtake_options');
+  if (error) return toast(error.message, 'err');
+  OPT = data;
+  const mo = OPT.months.map(m => `<option value="${m}">${monthLabel(m)}</option>`).join('');
+  document.getElementById('mFrom').innerHTML = mo;
+  document.getElementById('mTo').innerHTML = mo;
+  if (OPT.months.length) { document.getElementById('mFrom').value = OPT.months[0]; document.getElementById('mTo').value = OPT.months[0]; }
+  const fill = (id, list) => document.getElementById(id).innerHTML = '<option value="">All</option>' + list.map(x => `<option>${esc(x)}</option>`).join('');
+  fill('fWs', OPT.wholesalers); fill('fTeam', OPT.teams); fill('fBde', OPT.bdes);
+  ['mFrom', 'mTo', 'fWs', 'fTeam', 'fBde'].forEach(id => document.getElementById(id).onchange = () => { page = 0; load(); });
+  let t; document.getElementById('fQ').oninput = () => { clearTimeout(t); t = setTimeout(() => { page = 0; load(); }, 350); };
+  load();
+})();
+
+function filters() {
+  const a = document.getElementById('mFrom').value, b = document.getElementById('mTo').value;
+  const lo = a < b ? a : b, hi = a < b ? b : a;
+  return {
+    months: OPT.months.filter(m => m >= lo && m <= hi),
+    ws: document.getElementById('fWs').value || null,
+    team: document.getElementById('fTeam').value || null,
+    bde: document.getElementById('fBde').value || null,
+    q: document.getElementById('fQ').value.trim() || null
+  };
+}
+function query(f, cols) {
+  let q = sb.from('offtake_v').select(cols, cols === '*' ? { count: 'exact' } : undefined).in('received_month', f.months);
+  if (f.ws) q = q.eq('wholesaler', f.ws);
+  if (f.team) q = q.eq('current_team', f.team);
+  if (f.bde) q = q.eq('current_bde', f.bde);
+  if (f.q) { const s = f.q.replace(/[,()%]/g, ' '); q = q.or(`outlets.ilike.%${s}%,code.ilike.%${s}%,product.ilike.%${s}%,brand.ilike.%${s}%`); }
+  return q;
+}
+
+async function load() {
+  const f = filters();
+  if (!f.months.length) { document.getElementById('tbl').innerHTML = '<tr><td class="muted">No Off-take yet — load the history on Masters, or import a WS report.</td></tr>'; return; }
+  const sum = sb.rpc('offtake_summary', { p_months: f.months, p_wholesaler: f.ws, p_bde: f.bde, p_team: f.team, p_search: f.q });
+  const rows = query(f, '*').order('received_month', { ascending: false }).order('outlets').order('product').range(page * PAGE, page * PAGE + PAGE - 1);
+  const [s, r] = await Promise.all([sum, rows]);
+  if (s.error) toast(s.error.message, 'err');
+  else document.getElementById('kpis').innerHTML =
+    `<div class="kpi"><small>Vol. bottles</small><b>${fmt0(s.data.btls)}</b></div>` +
+    `<div class="kpi"><small>Value Exc. VAT</small><b>${fmt0(s.data.value_exc)}</b></div>` +
+    `<div class="kpi"><small>Value Inc. VAT</small><b>${fmt0(s.data.value_inc)}</b></div>` +
+    `<div class="kpi"><small>Outlets</small><b>${fmt0(s.data.outlets)}</b></div>`;
+  if (r.error) return toast(r.error.message, 'err');
+  total = r.count || 0;
+  document.getElementById('tbl').innerHTML = '<tr>' + COLS.map(c => `<th${c[2] && c[2] !== 'd' ? ' class="n"' : ''}>${c[0]}</th>`).join('') + '</tr>' +
+    (r.data.length ? r.data.map(x => '<tr>' + COLS.map(([, k, t]) =>
+      t === 'm' ? `<td class="n">${fmt2(x[k])}</td>` : t === 'n' ? `<td class="n">${fmt0(x[k])}</td>` : t === 'd' ? `<td>${monthLabel(x[k])}</td>` : `<td>${esc(x[k])}</td>`).join('') + '</tr>').join('')
+      : `<tr><td colspan="${COLS.length}" class="muted">No rows.</td></tr>`);
+  document.getElementById('pageInfo').textContent = total ? `Rows ${fmt0(page * PAGE + 1)}–${fmt0(Math.min(total, (page + 1) * PAGE))} of ${fmt0(total)}` : '';
+  document.getElementById('prev').disabled = page === 0;
+  document.getElementById('next').disabled = (page + 1) * PAGE >= total;
+}
+document.getElementById('prev').onclick = () => { page--; load(); };
+document.getElementById('next').onclick = () => { page++; load(); };
+
+document.getElementById('exp').onclick = async () => {
+  const f = filters(); if (!f.months.length) return;
+  const btn = document.getElementById('exp'), bar = document.getElementById('expBar');
+  btn.disabled = true; bar.hidden = false;
+  try {
+    const cols = COLS.map(c => c[1]).join(',');
+    let all = [], from = 0;
+    for (;;) {
+      const { data, error } = await query(f, 'id,' + cols).order('id').range(from, from + 999);
+      if (error) throw error;
+      all = all.concat(data); from += 1000;
+      bar.firstChild.style.width = Math.min(100, 100 * all.length / Math.max(total, 1)) + '%';
+      if (data.length < 1000) break;
+    }
+    const aoa = [COLS.map(c => c[0])].concat(all.map(x => COLS.map(([, k, t]) => {
+      const v = x[k];
+      if (v == null) return null;
+      if (t === 'd') { const [y, m, d] = v.split('-'); return new Date(Date.UTC(+y, +m - 1, +d)); }
+      return t ? +v : v;
+    })));
+    const ws = XLSX.utils.aoa_to_sheet(aoa, { cellDates: true, dateNF: 'mmm-yy' });
+    ws['!cols'] = COLS.map(c => ({ wch: Math.max(10, c[0].length + 2) }));
+    ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: aoa.length - 1, c: COLS.length - 1 } }) };
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Data_Total Off-Take');
+    const a = f.months[f.months.length - 1], b = f.months[0];
+    XLSX.writeFile(wb, `Off-Take ${monthLabel(a)}${a !== b ? ' - ' + monthLabel(b) : ''}.xlsx`);
+  } catch (e) { toast('Export failed: ' + e.message, 'err'); }
+  btn.disabled = false; bar.hidden = true;
+};
+</script>
+</body>
+</html>

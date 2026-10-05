@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matching</title>
+<link rel="icon" href="img/logo-64.png">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600&family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=1">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js?v=1"></script>
+<script src="js/common.js?v=1"></script>
+<style>
+  .sug { display: inline-block; margin: 4px 6px 0 0; padding: 2px 10px; border-radius: 99px; background: #F3F4F6; font-size: 12px; cursor: pointer; border: 0; color: var(--text); }
+  .sug:hover { background: var(--c3); color: var(--c1); }
+  td.pick { min-width: 340px; }
+  tr.done td { background: #F7FBF8; }
+  tr.skip td { color: #9CA3AF; }
+  input.bad { outline: 2px solid #FCA5A5; }
+  .factor { width: 70px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Matching</h1>
+  <p class="sub">Tell the site which outlet each WS customer is and which SKU each WS product is. Saved matches are used again every month.</p>
+
+  <div class="card">
+    <div class="row">
+      <div><label for="batch">Upload</label><select id="batch"></select></div>
+      <div style="flex:0 0 auto"><button class="btn" id="confirm" type="button">Send to Off-take</button></div>
+    </div>
+    <p id="batchInfo" class="muted" style="margin:12px 0 0"></p>
+  </div>
+
+  <div class="grid kpis" id="kpis"></div>
+
+  <div class="card" id="work" hidden>
+    <div class="tabs">
+      <button type="button" data-tab="customer" class="on">Customers</button>
+      <button type="button" data-tab="product">Products</button>
+    </div>
+    <div class="row" style="margin-bottom:12px">
+      <div><input type="search" id="q" placeholder="Search names"></div>
+      <div style="flex:0 0 auto"><select id="show"><option value="todo">Still to match</option><option value="all">All</option></select></div>
+      <div style="flex:0 0 auto"><button class="btn light" id="useSug" type="button">Use all first suggestions</button></div>
+      <div style="flex:0 0 auto"><button class="btn" id="saveMaps" type="button">Save matches</button></div>
+    </div>
+    <p class="muted" id="hint" style="margin:-4px 0 10px"></p>
+    <div class="tbl-wrap"><table id="tbl"></table></div>
+  </div>
+</main>
+<datalist id="dlOutlets"></datalist>
+<datalist id="dlSkus"></datalist>
+
+<script>
+let batch = null, lines = [], outlets = [], skus = [], cmap = {}, pmap = {}, otherC = {}, otherP = {};
+let groups = { customer: [], product: [] }, tab = 'customer';
+const edits = { customer: {}, product: {} };      // key -> { value, skip, factor }
+const OUT = {}, SKU = {};
+
+(async () => {
+  if (!await requireLogin()) return;
+  renderNav();
+  const id = new URLSearchParams(location.search).get('batch');
+  const { data: bs } = await sb.from('import_batches').select('id, wholesaler, month, file_name, status').order('created_at', { ascending: false }).limit(60);
+  const sel = document.getElementById('batch');
+  sel.innerHTML = '<option value="">Choose an upload…</option>' + (bs || []).map(b =>
+    `<option value="${b.id}">${esc(b.wholesaler)} · ${monthLabel(b.month)} · ${esc(b.file_name || '')}${b.status === 'confirmed' ? ' (in Off-take)' : ''}</option>`).join('');
+  sel.onchange = () => { if (sel.value) location.search = '?batch=' + sel.value; };
+  [outlets, skus] = await Promise.all([
+    fetchAll(() => sb.from('outlets').select('code, outlet_name, area, bde').eq('active', true).order('code')),
+    fetchAll(() => sb.from('skus').select('sku_code, product, brand, size').eq('active', true).order('sku_code'))
+  ]);
+  outlets.forEach(o => { o._p = prep(o.outlet_name); o._label = `${o.code} — ${o.outlet_name || ''}${o.area ? ' (' + o.area + ')' : ''}`; OUT[o.code] = o; });
+  skus.forEach(s => { s._p = prep(s.product + ' ' + (s.size || '')); s._label = `${s.sku_code} — ${s.product || ''}${s.size ? ' · ' + s.size : ''}`; SKU[s.sku_code] = s; });
+  document.getElementById('dlOutlets').innerHTML = outlets.map(o => `<option value="${esc(o._label)}">`).join('');
+  document.getElementById('dlSkus').innerHTML = skus.map(s => `<option value="${esc(s._label)}">`).join('');
+  if (id) { sel.value = id; await loadBatch(+id); }
+})();
+
+async function loadBatch(id) {
+  const { data: b, error } = await sb.from('import_batches').select('*').eq('id', id).single();
+  if (error) return toast(error.message, 'err');
+  batch = b;
+  const [ls, cm, pm, oc, op] = await Promise.all([
+    fetchAll(() => sb.from('ws_lines').select('customer_key, customer_raw, customer_code, outlet_raw, product_key, product_raw, product_code, qty, amount').eq('batch_id', id).order('id')),
+    fetchAll(() => sb.from('customer_map').select('*').eq('wholesaler', b.wholesaler)),
+    fetchAll(() => sb.from('product_map').select('*').eq('wholesaler', b.wholesaler)),
+    fetchAll(() => sb.from('customer_map').select('customer_key, outlet_code').neq('wholesaler', b.wholesaler).not('outlet_code', 'is', null)),
+    fetchAll(() => sb.from('product_map').select('product_key, sku_code').neq('wholesaler', b.wholesaler).not('sku_code', 'is', null))
+  ]);
+  lines = ls;
+  cm.forEach(m => cmap[m.customer_key] = m);
+  pm.forEach(m => pmap[m.product_key] = m);
+  oc.forEach(m => otherC[m.customer_key] = m.outlet_code);   // the same name matched at another WS
+  op.forEach(m => otherP[m.product_key] = m.sku_code);
+  groups.customer = group('customer_key', l => ({ name: l.customer_raw, sub: [l.customer_code, l.outlet_raw].filter(Boolean).join(' · '), outlet: l.outlet_raw }));
+  groups.product = group('product_key', l => ({ name: l.product_raw, sub: l.product_code || '' }));
+  document.getElementById('batchInfo').innerHTML =
+    `<b>${esc(b.wholesaler)}</b> · ${monthLabel(b.month)} · ${esc(b.file_name || '')} · ${fmt0(b.line_count)} lines · ` +
+    (b.status === 'confirmed' ? `<span class="pill ok">In Off-take · ${fmt0(b.offtake_rows)} rows</span> — sending again replaces it` : '<span class="pill warn">Draft — not in Off-take yet</span>');
+  document.getElementById('work').hidden = false;
+  draw();
+}
+
+function group(keyField, info) {
+  const g = {};
+  lines.forEach(l => {
+    const k = l[keyField];
+    if (!g[k]) g[k] = { key: k, lines: 0, qty: 0, amount: 0, ...info(l) };
+    g[k].lines++; g[k].qty += +l.qty || 0; g[k].amount += +l.amount || 0;
+  });
+  return Object.values(g).sort((a, b) => b.qty - a.qty);
+}
+
+/* where a row stands right now: saved match, edit on screen, or nothing */
+function state(kind, g) {
+  const e = edits[kind][g.key], m = (kind === 'customer' ? cmap : pmap)[g.key];
+  const val = e ? e.value : (m ? (kind === 'customer' ? m.outlet_code : m.sku_code) : null);
+  const skip = e ? e.skip : !!(m && m.skip);
+  const factor = e && e.factor != null ? e.factor : (m && m.factor) || 1;
+  return { val, skip, factor, done: skip || !!val, changed: !!e };
+}
+
+function suggestions(kind, g) {
+  if (g._sug) return g._sug;
+  const other = kind === 'customer' ? otherC[g.key] : otherP[g.key];
+  const list = kind === 'customer' ? outlets : skus;
+  let s = bestMatches(kind === 'customer' ? (g.outlet || g.name) : g.name, list, 3).map(r => r.x);
+  if (kind === 'customer' && g.outlet) s = s.concat(bestMatches(g.name, list, 2).map(r => r.x));
+  const byCode = kind === 'customer' ? OUT : SKU;
+  if (other && byCode[other]) s.unshift(byCode[other]);
+  const seen = new Set();
+  g._sug = s.filter(x => { const c = x.code || x.sku_code; if (seen.has(c)) return false; seen.add(c); return true; }).slice(0, 4);
+  return g._sug;
+}
+
+function kpis() {
+  const c = groups.customer, p = groups.product;
+  const cd = c.filter(g => state('customer', g).done).length, pd = p.filter(g => state('product', g).done).length;
+  const ok = lines.filter(l => {
+    const a = state('customer', { key: l.customer_key }), b = state('product', { key: l.product_key });
+    return a.val && !a.skip && b.val && !b.skip;
+  });
+  const qtyAll = lines.reduce((a, l) => a + (+l.qty || 0), 0), qtyOk = ok.reduce((a, l) => a + (+l.qty || 0), 0);
+  document.getElementById('kpis').innerHTML =
+    `<div class="kpi"><small>Customers matched</small><b>${fmt0(cd)} / ${fmt0(c.length)}</b></div>` +
+    `<div class="kpi"><small>Products matched</small><b>${fmt0(pd)} / ${fmt0(p.length)}</b></div>` +
+    `<div class="kpi"><small>Quantity going to Off-take</small><b>${fmt0(qtyOk)} / ${fmt0(qtyAll)}</b></div>`;
+  document.querySelector('[data-tab=customer]').textContent = `Customers (${fmt0(c.length - cd)} to match)`;
+  document.querySelector('[data-tab=product]').textContent = `Products (${fmt0(p.length - pd)} to match)`;
+}
+
+function draw() {
+  kpis();
+  const kind = tab, q = normKey(document.getElementById('q').value), show = document.getElementById('show').value;
+  const rows = groups[kind].filter(g => (show === 'all' || !state(kind, g).done) && (!q || normKey(g.name + ' ' + g.sub).includes(q)));
+  document.getElementById('hint').textContent = kind === 'customer'
+    ? 'Pick the outlet, or tick "Not an outlet" for cash sales, staff and other lines that should not count.'
+    : 'Pick the SKU. "Bottles per unit" = 6 or 12 when the WS reports cases instead of bottles. Tick "Not ours" for products that are not in the SKU list.';
+  const shown = rows.slice(0, 300);
+  document.getElementById('tbl').innerHTML =
+    `<tr><th>WS ${kind === 'customer' ? 'customer' : 'product'}</th><th class="n">Lines</th><th class="n">Qty</th><th class="n">Amount</th><th>Match to</th>${kind === 'product' ? '<th>Bottles per unit</th>' : ''}<th>${kind === 'customer' ? 'Not an outlet' : 'Not ours'}</th></tr>` +
+    (shown.length ? shown.map((g, i) => rowHtml(kind, g, i)).join('') : `<tr><td colspan="7" class="muted">${show === 'todo' ? 'Everything is matched.' : 'Nothing found.'}</td></tr>`) +
+    (rows.length > shown.length ? `<tr><td colspan="7" class="muted">Showing 300 of ${fmt0(rows.length)} — match these, then the next ones show.</td></tr>` : '');
+  bindRows(kind, shown);
+}
+
+function rowHtml(kind, g, i) {
+  const st = state(kind, g), byCode = kind === 'customer' ? OUT : SKU;
+  const label = st.val ? (byCode[st.val] ? byCode[st.val]._label : st.val) : '';
+  const sug = !st.done ? suggestions(kind, g).map((x, j) => `<button class="sug" type="button" data-i="${i}" data-c="${esc(x.code || x.sku_code)}">${esc(x._label)}</button>`).join('') : '';
+  return `<tr class="${st.skip ? 'skip' : st.done ? 'done' : ''}">
+    <td>${esc(g.name)}${g.sub ? '<br><span class="muted">' + esc(g.sub) + '</span>' : ''}</td>
+    <td class="n">${fmt0(g.lines)}</td><td class="n">${fmt0(g.qty)}</td><td class="n">${fmt0(g.amount)}</td>
+    <td class="pick"><input type="text" list="${kind === 'customer' ? 'dlOutlets' : 'dlSkus'}" data-i="${i}" value="${esc(label)}" placeholder="Type code or name"${st.skip ? ' disabled' : ''}><div>${sug}</div></td>
+    ${kind === 'product' ? `<td><input type="number" class="factor" min="0" step="any" data-i="${i}" value="${st.factor}"></td>` : ''}
+    <td><input type="checkbox" data-i="${i}" class="skipbox"${st.skip ? ' checked' : ''}></td></tr>`;
+}
+
+function setEdit(kind, g, patch) {
+  const st = state(kind, g);
+  edits[kind][g.key] = Object.assign({ value: st.val, skip: st.skip, factor: st.factor }, edits[kind][g.key] || {}, patch);
+}
+
+function bindRows(kind, shown) {
+  const tbl = document.getElementById('tbl'), byCode = kind === 'customer' ? OUT : SKU;
+  tbl.querySelectorAll('input[type=text]').forEach(inp => inp.onchange = () => {
+    const g = shown[+inp.dataset.i], v = inp.value.trim();
+    const code = v.split(' — ')[0].trim();
+    if (v && !byCode[code]) { inp.classList.add('bad'); toast('Not in the list: ' + v, 'err'); return; }
+    inp.classList.remove('bad');
+    setEdit(kind, g, { value: v ? code : null });
+    kpis();
+  });
+  tbl.querySelectorAll('.sug').forEach(b => b.onclick = () => {
+    const g = shown[+b.dataset.i];
+    setEdit(kind, g, { value: b.dataset.c, skip: false });
+    const inp = tbl.querySelector(`input[type=text][data-i="${b.dataset.i}"]`);
+    inp.value = byCode[b.dataset.c]._label;
+    b.parentNode.innerHTML = '';
+    inp.closest('tr').className = 'done';
+    kpis();
+  });
+  tbl.querySelectorAll('.factor').forEach(inp => inp.onchange = () => setEdit(kind, shown[+inp.dataset.i], { factor: +inp.value || 1 }));
+  tbl.querySelectorAll('.skipbox').forEach(cb => cb.onchange = () => { setEdit(kind, shown[+cb.dataset.i], { skip: cb.checked }); draw(); });
+}
+
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  tab = b.dataset.tab; draw();
+});
+document.getElementById('q').oninput = draw;
+document.getElementById('show').onchange = draw;
+document.getElementById('useSug').onclick = () => {
+  let n = 0;
+  groups[tab].forEach(g => { if (!state(tab, g).done) { const s = suggestions(tab, g)[0]; if (s) { setEdit(tab, g, { value: s.code || s.sku_code }); n++; } } });
+  toast(n ? `${n} filled in — check them, then Save matches` : 'No suggestions to use');
+  document.getElementById('show').value = 'all';
+  draw();
+};
+
+async function saveMaps() {
+  const ws = batch.wholesaler, now = new Date().toISOString();
+  const cRows = Object.entries(edits.customer).map(([k, e]) => {
+    const g = groups.customer.find(x => x.key === k);
+    return { wholesaler: ws, customer_key: k, raw_name: g ? g.name + (g.outlet ? ' | ' + g.outlet : '') : k, outlet_code: e.skip ? null : e.value, skip: !!e.skip, updated_at: now };
+  });
+  const pRows = Object.entries(edits.product).map(([k, e]) => {
+    const g = groups.product.find(x => x.key === k);
+    return { wholesaler: ws, product_key: k, raw_name: g ? g.name : k, sku_code: e.skip ? null : e.value, skip: !!e.skip, factor: e.factor || 1, updated_at: now };
+  });
+  if (cRows.length) await writeChunks('customer_map', cRows, { onConflict: 'wholesaler,customer_key' });
+  if (pRows.length) await writeChunks('product_map', pRows, { onConflict: 'wholesaler,product_key' });
+  cRows.forEach(r => cmap[r.customer_key] = r);
+  pRows.forEach(r => pmap[r.product_key] = r);
+  edits.customer = {}; edits.product = {};
+  return cRows.length + pRows.length;
+}
+document.getElementById('saveMaps').onclick = async () => {
+  try { const n = await saveMaps(); toast(n ? `Saved ${n} matches` : 'Nothing changed', 'ok'); draw(); }
+  catch (e) { toast('Not saved: ' + e.message, 'err'); }
+};
+
+document.getElementById('confirm').onclick = async () => {
+  if (!batch) return toast('Choose an upload first', 'err');
+  const btn = document.getElementById('confirm');
+  const left = lines.filter(l => !(state('customer', { key: l.customer_key }).done && state('product', { key: l.product_key }).done));
+  const msg = (left.length ? `${fmt0(left.length)} lines are not matched yet and will be left out.\n\n` : '') +
+    `Send ${batch.wholesaler} ${monthLabel(batch.month)} to the Off-take? It replaces what ${batch.wholesaler} already has for that month.`;
+  if (!confirm(msg)) return;
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try {
+    await saveMaps();
+    const { data, error } = await sb.rpc('confirm_batch', { p_batch: batch.id });
+    if (error) throw error;
+    toast(`Done — ${fmt0(data)} rows in the Off-take`, 'ok');
+    await loadBatch(batch.id);
+  } catch (e) { toast('Not sent: ' + e.message, 'err'); }
+  btn.disabled = false; btn.textContent = 'Send to Off-take';
+};
+</script>
+</body>
+</html>

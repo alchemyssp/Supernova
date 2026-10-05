@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Import WS Report</title>
+<link rel="icon" href="img/logo-64.png">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600&family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=1">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="js/config.js?v=1"></script>
+<script src="js/common.js?v=1"></script>
+<script src="js/parsers.js?v=1"></script>
+<style>
+  .peek td { font-size: 12px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+  .peek tr.head td { background: var(--c3); font-weight: 600; }
+  .peek th { font-size: 12px; }
+  .colmap { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+  .status td.n b { font-weight: 500; }
+  .status td.miss { color: #C0C4CC; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Import WS report</h1>
+  <p class="sub">Upload the monthly report of one wholesaler. The site reads its layout, then you match its customers and products once — next month they are remembered.</p>
+
+  <div class="card">
+    <div class="row">
+      <div><label for="ws">Wholesaler</label><select id="ws"></select></div>
+      <div style="flex:0 0 auto"><button class="btn gray" id="addWs" type="button">+ New wholesaler</button></div>
+      <div><label for="month">Month of the report</label><input type="month" id="month"></div>
+    </div>
+    <label class="drop" id="drop" style="margin-top:16px">
+      <input type="file" id="file" accept=".xlsx,.xls,.xlsm,.csv">
+      <b>Choose the WS file</b> or drop it here (Excel or CSV)
+    </label>
+  </div>
+
+  <div class="card" id="readCard" hidden>
+    <h2 id="fileName"></h2>
+    <div class="row">
+      <div><label for="sheet">Sheet</label><select id="sheet"></select></div>
+      <div><label for="layout">Layout</label>
+        <select id="layout">
+          <option value="table">Table — one sale per row</option>
+          <option value="grouped">Grouped — customer row, then its products</option>
+          <option value="boozia">BOOZIA — Sales History by Customer</option>
+        </select></div>
+      <div><label for="headerRow">Header row</label><input type="number" id="headerRow" min="1"></div>
+    </div>
+    <div id="colBox" style="margin-top:14px"></div>
+    <div class="tbl-wrap peek" style="margin-top:14px;max-height:340px"><table id="peek"></table></div>
+  </div>
+
+  <div class="card" id="resultCard" hidden>
+    <div class="grid kpis" id="resKpis"></div>
+    <p id="resNote" class="muted"></p>
+    <div class="tbl-wrap" style="max-height:420px"><table id="resTbl"></table></div>
+    <div class="row" style="margin-top:16px;justify-content:flex-end">
+      <div style="flex:0 0 auto"><button class="btn" id="save" type="button">Save &amp; match</button></div>
+    </div>
+    <div class="bar" style="margin-top:10px" hidden id="saveBar"><i></i></div>
+  </div>
+
+  <div class="card">
+    <h2>Bottles by wholesaler and month</h2>
+    <p class="muted" style="margin-top:-6px">Confirmed in the Off-take. An empty cell = that month is not in yet.</p>
+    <div class="tbl-wrap status"><table id="status"></table></div>
+  </div>
+
+  <div class="card">
+    <h2>Uploaded reports</h2>
+    <div class="tbl-wrap"><table id="batches"></table></div>
+  </div>
+</main>
+
+<script>
+let WS = [], book = null, aoa = [], lines = [], fileName = '';
+let monthPicked = false;   // the month was chosen by hand -> stop guessing it from the file
+document.getElementById('month').addEventListener('change', () => { monthPicked = true; if (book) run(); });
+
+(async () => {
+  if (!await requireLogin()) return;
+  renderNav();
+  const d = new Date(); d.setMonth(d.getMonth() - 1);
+  document.getElementById('month').value = d.toISOString().slice(0, 7);
+  await loadWs();
+  loadBatches();
+  loadStatus();
+})();
+
+async function loadWs(select) {
+  const { data, error } = await sb.from('wholesalers').select('*').eq('active', true).order('name');
+  if (error) return toast(error.message, 'err');
+  WS = data;
+  const s = document.getElementById('ws');
+  const keep = select || s.value || localStorage.getItem('sn_ws') || '';
+  s.innerHTML = '<option value="">Choose…</option>' + WS.map(w => `<option>${esc(w.name)}</option>`).join('');
+  if (WS.some(w => w.name === keep)) s.value = keep;
+}
+const curWs = () => WS.find(w => w.name === document.getElementById('ws').value);
+
+document.getElementById('addWs').onclick = async () => {
+  const name = (prompt('Name of the wholesaler (as it should show in the Off-take "Wholesaler" column)') || '').trim();
+  if (!name) return;
+  const { error } = await sb.from('wholesalers').upsert({ name, active: true }, { onConflict: 'name' });
+  if (error) return toast(error.message, 'err');
+  await loadWs(name);
+  toast('Added ' + name, 'ok');
+};
+document.getElementById('ws').onchange = () => {
+  try { localStorage.setItem('sn_ws', document.getElementById('ws').value); } catch (e) {}
+  if (book) useSavedFormat();
+};
+
+/* ── file ── */
+const drop = document.getElementById('drop');
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]); };
+document.getElementById('file').onchange = e => { if (e.target.files[0]) readFile(e.target.files[0]); e.target.value = ''; };
+
+async function readFile(f) {
+  if (!curWs()) return toast('Choose the wholesaler first', 'err');
+  fileName = f.name;
+  monthPicked = false;
+  try {
+    book = XLSX.read(await f.arrayBuffer(), { type: 'array', raw: false, cellDates: false });
+  } catch (e) { return toast('Could not open the file: ' + e.message, 'err'); }
+  document.getElementById('fileName').textContent = f.name;
+  /* visible sheets only; the one with the most rows is chosen */
+  const sheets = book.SheetNames.filter(n => !(book.Workbook && book.Workbook.Sheets && (book.Workbook.Sheets.find(s => s.name === n) || {}).Hidden));
+  const list = sheets.length ? sheets : book.SheetNames;
+  const size = n => { const r = book.Sheets[n]['!ref']; return r ? XLSX.utils.decode_range(r).e.r : 0; };
+  document.getElementById('sheet').innerHTML = list.map(n => `<option>${esc(n)}</option>`).join('');
+  document.getElementById('sheet').value = list.reduce((a, b) => size(b) > size(a) ? b : a);
+  document.getElementById('readCard').hidden = false;
+  useSavedFormat();
+}
+
+function loadSheet() {
+  const ws = book.Sheets[document.getElementById('sheet').value];
+  aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '', blankrows: true });
+}
+
+/* the format saved for this WS; else a guess (and a ready-made one for the WS we know) */
+function useSavedFormat() {
+  const w = curWs();
+  const saved = w && w.config && w.config.layout ? w.config : null;
+  if (saved && saved.sheet && book.SheetNames.includes(saved.sheet)) document.getElementById('sheet').value = saved.sheet;
+  loadSheet();
+  let f = saved && saved.layout === w.layout ? { layout: w.layout, config: saved } : null;
+  if (!f) f = guessLayout(aoa);
+  setForm(f.layout, f.config);
+  run();
+}
+
+function setForm(layout, config) {
+  document.getElementById('layout').value = layout;
+  document.getElementById('headerRow').value = config.headerRow || findHeaderRow(aoa);
+  drawColBox(layout, config);
+}
+
+function letterOptions(sel) {
+  const hr = +document.getElementById('headerRow').value || 1;
+  const head = aoa[hr - 1] || [];
+  const width = Math.max(head.length, ...aoa.slice(0, 30).map(r => (r || []).length));
+  let h = '<option value="">—</option>';
+  for (let i = 0; i < width; i++) {
+    const L = colLetter(i);
+    h += `<option value="${L}"${L === sel ? ' selected' : ''}>${L}${head[i] !== '' && head[i] != null ? ' · ' + esc(String(head[i]).slice(0, 26)) : ''}</option>`;
+  }
+  return h;
+}
+
+function drawColBox(layout, config) {
+  const box = document.getElementById('colBox');
+  if (layout === 'boozia') { box.innerHTML = '<p class="muted">Columns are found by their names (Customer Name, Description, Date, Qty, Unit Price, Total Amt).</p>'; return; }
+  let fields;
+  if (layout === 'grouped') {
+    fields = [['customerCol', 'Customer name (own row)'], ['productCol', 'Product name'], ['qtyCol', 'Quantity'], ['priceCol', 'Unit price'], ['amountCol', 'Amount']];
+    box.innerHTML = '<div class="colmap">' + fields.map(([k, l]) =>
+      `<div><label>${l}</label><select data-k="${k}">${letterOptions(config[k])}</select></div>`).join('') + '</div>';
+  } else {
+    const cols = config.cols || {};
+    box.innerHTML = '<div class="colmap">' + FIELDS.map(([k, l]) =>
+      `<div><label>${l}${NEED.includes(k) ? ' *' : ''}</label><select data-k="${k}">${letterOptions(cols[k])}</select></div>`).join('') + '</div>' +
+      '<p class="muted" style="margin:8px 0 0">* needed. If the WS has a separate outlet / shop name, pick it too — the matching then uses customer + outlet.</p>';
+  }
+  box.querySelectorAll('select').forEach(s => s.onchange = run);
+}
+
+function readForm() {
+  const layout = document.getElementById('layout').value;
+  const config = { layout, sheet: document.getElementById('sheet').value, headerRow: +document.getElementById('headerRow').value || 1 };
+  const sel = [...document.querySelectorAll('#colBox select')];
+  if (layout === 'grouped') sel.forEach(s => config[s.dataset.k] = s.value);
+  if (layout === 'table') { config.cols = {}; sel.forEach(s => { if (s.value) config.cols[s.dataset.k] = s.value; }); }
+  return config;
+}
+
+document.getElementById('sheet').onchange = () => { loadSheet(); const g = guessLayout(aoa); setForm(g.layout, g.config); run(); };
+document.getElementById('layout').onchange = () => {
+  const g = guessLayout(aoa), layout = document.getElementById('layout').value;
+  const cfg = g.layout === layout ? g.config : (layout === 'grouped'
+    ? { headerRow: g.config.headerRow, customerCol: 'A', productCol: 'A', qtyCol: 'B', amountCol: 'D' }
+    : { headerRow: g.config.headerRow, cols: guessColumns(aoa, g.config.headerRow) });
+  setForm(layout, cfg); run();
+};
+document.getElementById('headerRow').onchange = () => {
+  const cfg = readForm();
+  if (cfg.layout === 'table') cfg.cols = guessColumns(aoa, cfg.headerRow);
+  drawColBox(cfg.layout, cfg); run();
+};
+
+function drawPeek() {
+  const hr = +document.getElementById('headerRow').value || 1;
+  const rows = aoa.slice(0, Math.max(hr + 8, 14));
+  const width = Math.min(Math.max(...rows.map(r => (r || []).length), 1), 26);
+  let h = '<tr><th>#</th>' + Array.from({ length: width }, (_, i) => `<th>${colLetter(i)}</th>`).join('') + '</tr>';
+  rows.forEach((r, i) => {
+    h += `<tr${i + 1 === hr ? ' class="head"' : ''}><td class="muted">${i + 1}</td>` +
+      Array.from({ length: width }, (_, j) => `<td title="${esc(r && r[j])}">${esc(r && r[j])}</td>`).join('') + '</tr>';
+  });
+  document.getElementById('peek').innerHTML = h;
+}
+
+function run() {
+  drawPeek();
+  const cfg = readForm();
+  try { lines = parseSheet(aoa, cfg.layout, cfg); }
+  catch (e) { lines = []; toast(e.message, 'err'); }
+  if (!monthPicked) { const g = guessMonth(aoa, lines); if (g) document.getElementById('month').value = g; }
+  const qty = lines.reduce((a, l) => a + (l.qty || 0), 0), amt = lines.reduce((a, l) => a + (l.amount || 0), 0);
+  const cust = new Set(lines.map(l => l.customer_key)).size, prod = new Set(lines.map(l => l.product_key)).size;
+  document.getElementById('resKpis').innerHTML =
+    `<div class="kpi"><small>Lines read</small><b>${fmt0(lines.length)}</b></div>` +
+    `<div class="kpi"><small>Quantity</small><b>${fmt0(qty)}</b></div>` +
+    `<div class="kpi"><small>Amount (as in the file)</small><b>${fmt0(amt)}</b></div>` +
+    `<div class="kpi"><small>Customers · Products</small><b>${fmt0(cust)} · ${fmt0(prod)}</b></div>`;
+  const dated = lines.filter(l => l.doc_date);
+  const m = document.getElementById('month').value;
+  const other = dated.filter(l => l.doc_date.slice(0, 7) !== m).length;
+  document.getElementById('resNote').innerHTML = !lines.length
+    ? '<span class="err">No sale lines found — check the layout, header row and columns above.</span>'
+    : (other ? `<span class="warn">${fmt0(other)} lines are dated outside ${esc(m)}. They are all saved under the month above.</span>` : 'Check the first lines below, then save.');
+  const show = lines.slice(0, 60);
+  document.getElementById('resTbl').innerHTML =
+    '<tr><th>Date</th><th>Customer</th><th>Outlet</th><th>Product</th><th class="n">Qty</th><th class="n">Unit price</th><th class="n">Amount</th></tr>' +
+    show.map(l => `<tr><td>${esc(l.doc_date || '')}</td><td>${esc(l.customer_raw)}${l.customer_code ? ' <span class="muted">' + esc(l.customer_code) + '</span>' : ''}</td><td>${esc(l.outlet_raw || '')}</td><td>${esc(l.product_raw)}</td><td class="n">${fmt0(l.qty)}</td><td class="n">${fmt2(l.unit_price)}</td><td class="n">${fmt2(l.amount)}</td></tr>`).join('') +
+    (lines.length > show.length ? `<tr><td colspan="7" class="muted">… and ${fmt0(lines.length - show.length)} more lines</td></tr>` : '');
+  document.getElementById('resultCard').hidden = false;
+  document.getElementById('save').disabled = !lines.length;
+}
+
+/* ── save ── */
+document.getElementById('save').onclick = async () => {
+  const w = curWs(), month = document.getElementById('month').value;
+  if (!w) return toast('Choose the wholesaler', 'err');
+  if (!month) return toast('Choose the month', 'err');
+  const btn = document.getElementById('save'), bar = document.getElementById('saveBar');
+  btn.disabled = true; bar.hidden = false;
+  try {
+    const cfg = readForm();
+    await sb.from('wholesalers').update({ layout: cfg.layout, config: cfg, updated_at: new Date().toISOString() }).eq('name', w.name);
+    w.layout = cfg.layout; w.config = cfg;
+    const { data: b, error } = await sb.from('import_batches').insert({
+      wholesaler: w.name, month: month + '-01', file_name: fileName, line_count: lines.length,
+      qty: lines.reduce((a, l) => a + (l.qty || 0), 0), amount: lines.reduce((a, l) => a + (l.amount || 0), 0)
+    }).select('id').single();
+    if (error) throw error;
+    const rows = lines.map(l => ({ batch_id: b.id, ...l }));
+    await writeChunks('ws_lines', rows, null, (n, t) => { bar.firstChild.style.width = (100 * n / t) + '%'; });
+    location.href = 'matching.html?batch=' + b.id;
+  } catch (e) {
+    toast('Not saved: ' + e.message, 'err');
+    btn.disabled = false; bar.hidden = true;
+  }
+};
+
+/* ── lists ── */
+async function loadBatches() {
+  const { data, error } = await sb.from('import_batches').select('*').order('created_at', { ascending: false }).limit(40);
+  if (error) return;
+  document.getElementById('batches').innerHTML =
+    '<tr><th>Wholesaler</th><th>Month</th><th>File</th><th class="n">Lines</th><th class="n">Qty</th><th>Status</th><th>Uploaded</th><th></th></tr>' +
+    (data.length ? data.map(b => `<tr><td>${esc(b.wholesaler)}</td><td>${monthLabel(b.month)}</td><td>${esc(b.file_name || '')}</td>
+      <td class="n">${fmt0(b.line_count)}</td><td class="n">${fmt0(b.qty)}</td>
+      <td>${b.status === 'confirmed' ? `<span class="pill ok">In Off-take · ${fmt0(b.offtake_rows)} rows</span>` : '<span class="pill warn">Draft — not in Off-take</span>'}</td>
+      <td class="muted">${new Date(b.created_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}</td>
+      <td style="white-space:nowrap"><a class="btn small light" href="matching.html?batch=${b.id}">Matching</a>
+      <button class="btn small gray" onclick="delBatch(${b.id})">Delete</button></td></tr>`).join('')
+      : '<tr><td colspan="8" class="muted">Nothing uploaded yet.</td></tr>');
+}
+async function delBatch(id) {
+  if (!confirm('Delete this upload? If it is in the Off-take, its rows are removed from the Off-take too.')) return;
+  const { error } = await sb.from('import_batches').delete().eq('id', id);
+  if (error) return toast(error.message, 'err');
+  toast('Deleted', 'ok'); loadBatches(); loadStatus();
+}
+
+async function loadStatus() {
+  const from = new Date(); from.setDate(1); from.setMonth(from.getMonth() - 6);
+  const { data, error } = await sb.rpc('offtake_ws_months', { p_from: from.toISOString().slice(0, 10) });
+  if (error) return;
+  const months = [];
+  for (let i = 6; i >= 0; i--) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i); months.push(d.toISOString().slice(0, 7) + '-01'); }
+  const names = [...new Set([...WS.map(w => w.name), ...data.map(r => r.wholesaler)])].sort();
+  const map = {}; data.forEach(r => map[r.wholesaler + '|' + r.received_month] = r.btls);
+  document.getElementById('status').innerHTML =
+    '<tr><th>Wholesaler</th>' + months.map(m => `<th class="n">${monthLabel(m)}</th>`).join('') + '</tr>' +
+    names.map(n => '<tr><td>' + esc(n) + '</td>' + months.map(m => {
+      const v = map[n + '|' + m];
+      return v == null ? '<td class="n miss">–</td>' : `<td class="n"><b>${fmt0(v)}</b></td>`;
+    }).join('') + '</tr>').join('');
+}
+</script>
+</body>
+</html>

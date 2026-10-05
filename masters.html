@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Masters</title>
+<link rel="icon" href="img/logo-64.png">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600&family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=1">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="js/config.js?v=1"></script>
+<script src="js/common.js?v=1"></script>
+<style>
+  tr.click { cursor: pointer; }
+  .form { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-bottom: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Masters</h1>
+  <p class="sub">Outlets, SKUs and wholesalers used to build the Off-take.</p>
+
+  <div class="tabs">
+    <button type="button" data-tab="outlets" class="on">Outlets</button>
+    <button type="button" data-tab="skus">SKUs</button>
+    <button type="button" data-tab="ws">Wholesalers</button>
+    <button type="button" data-tab="load">Load from Off-take file</button>
+  </div>
+
+  <section class="card" id="t-outlets">
+    <div class="form" id="oForm"></div>
+    <div class="row" style="margin-bottom:14px">
+      <div><input type="search" id="oQ" placeholder="Search code, outlet, BDE, area"></div>
+      <div style="flex:0 0 auto"><button class="btn gray" id="oNew" type="button">Clear form</button></div>
+      <div style="flex:0 0 auto"><button class="btn" id="oSave" type="button">Save outlet</button></div>
+    </div>
+    <div class="tbl-wrap"><table id="oTbl"></table></div>
+  </section>
+
+  <section class="card" id="t-skus" hidden>
+    <div class="form" id="sForm"></div>
+    <div class="row" style="margin-bottom:14px">
+      <div><input type="search" id="sQ" placeholder="Search code, product, brand"></div>
+      <div style="flex:0 0 auto"><button class="btn gray" id="sNew" type="button">Clear form</button></div>
+      <div style="flex:0 0 auto"><button class="btn" id="sSave" type="button">Save SKU</button></div>
+    </div>
+    <div class="tbl-wrap"><table id="sTbl"></table></div>
+  </section>
+
+  <section class="card" id="t-ws" hidden>
+    <p class="muted" style="margin-top:0">The layout of each WS is saved the first time its file is imported. "Forget layout" makes the next import guess it again.</p>
+    <div class="tbl-wrap"><table id="wTbl"></table></div>
+  </section>
+
+  <section class="card" id="t-load" hidden>
+    <h2>Load from "Actual Off-Take by SKUs" Excel</h2>
+    <p class="muted" style="margin-top:-4px">Reads the sheet <b>Data_Total Off-Take</b>: every outlet (Code, Outlets, Group, Current Team, Current BDE, Area) and SKU (with the latest prices) is added or updated.
+      Tick the box to also load all its rows as the Off-take history — that replaces the history loaded before (uploads from WS files stay).</p>
+    <label style="display:flex;gap:8px;align-items:center;color:var(--text);margin:12px 0"><input type="checkbox" id="withHist" checked> Also load the Off-take history</label>
+    <label class="drop" id="drop"><input type="file" id="file" accept=".xlsx,.xlsm"><b>Choose the Off-take Excel</b> (big file — reading takes a minute)</label>
+    <p id="loadMsg" class="muted" style="margin:12px 0 6px"></p>
+    <div class="bar" hidden id="loadBar"><i></i></div>
+  </section>
+</main>
+
+<script>
+const O_FIELDS = [['code', 'Code'], ['outlet_name', 'Outlet'], ['group_name', 'Group'], ['team', 'Current Team'], ['bde', 'Current BDE'], ['area', 'Area']];
+const S_FIELDS = [['sku_code', 'SKU Code'], ['sku_company', 'SKU Company'], ['principle', 'Principle'], ['category', 'Category'], ['brand', 'Brand'],
+  ['product', 'Product'], ['size', 'Size'], ['packing', 'Packing', 'n'], ['price_inc', 'Price INC.VAT', 'n'], ['price_exc', 'Price EXC.VAT', 'n'], ['direct_price_exc', 'Direct Price Exc.VAT', 'n']];
+let outlets = [], skus = [];
+
+(async () => {
+  if (!await requireLogin()) return;
+  renderNav();
+  formHtml('oForm', O_FIELDS, 'o'); formHtml('sForm', S_FIELDS, 's');
+  await Promise.all([loadOutlets(), loadSkus(), loadWs()]);
+})();
+
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  ['outlets', 'skus', 'ws', 'load'].forEach(t => document.getElementById('t-' + t).hidden = t !== b.dataset.tab);
+});
+
+function formHtml(id, fields, p) {
+  document.getElementById(id).innerHTML = fields.map(([k, l, t]) =>
+    `<div><label for="${p}_${k}">${l}</label><input type="${t === 'n' ? 'number' : 'text'}" step="any" id="${p}_${k}"></div>`).join('');
+}
+const fillForm = (fields, p, row) => fields.forEach(([k]) => document.getElementById(p + '_' + k).value = row && row[k] != null ? row[k] : '');
+const readForm = (fields, p) => { const r = {}; fields.forEach(([k, , t]) => { const v = document.getElementById(p + '_' + k).value.trim(); r[k] = v === '' ? null : t === 'n' ? +v : v; }); return r; };
+
+/* ── outlets ── */
+async function loadOutlets() {
+  outlets = await fetchAll(() => sb.from('outlets').select('*').order('code'));
+  drawOutlets();
+}
+function drawOutlets() {
+  const q = normKey(document.getElementById('oQ').value);
+  const rows = outlets.filter(o => !q || normKey(O_FIELDS.map(f => o[f[0]]).join(' ')).includes(q));
+  const shown = rows.slice(0, 400);
+  document.getElementById('oTbl').innerHTML = '<tr>' + O_FIELDS.map(f => `<th>${f[1]}</th>`).join('') + '</tr>' +
+    shown.map((o, i) => `<tr class="click" data-i="${outlets.indexOf(o)}">` + O_FIELDS.map(f => `<td>${esc(o[f[0]])}</td>`).join('') + '</tr>').join('') +
+    `<tr><td colspan="6" class="muted">${fmt0(rows.length)} outlets${rows.length > shown.length ? ' — showing 400, search to find others' : ''}</td></tr>`;
+  document.querySelectorAll('#oTbl tr.click').forEach(tr => tr.onclick = () => { fillForm(O_FIELDS, 'o', outlets[+tr.dataset.i]); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+}
+document.getElementById('oQ').oninput = drawOutlets;
+document.getElementById('oNew').onclick = () => fillForm(O_FIELDS, 'o', null);
+document.getElementById('oSave').onclick = async () => {
+  const r = readForm(O_FIELDS, 'o');
+  if (!r.code) return toast('Code is needed', 'err');
+  r.updated_at = new Date().toISOString();
+  const { error } = await sb.from('outlets').upsert(r, { onConflict: 'code' });
+  if (error) return toast(error.message, 'err');
+  toast('Saved ' + r.code, 'ok'); loadOutlets();
+};
+
+/* ── SKUs ── */
+async function loadSkus() {
+  skus = await fetchAll(() => sb.from('skus').select('*').order('sku_code'));
+  drawSkus();
+}
+function drawSkus() {
+  const q = normKey(document.getElementById('sQ').value);
+  const rows = skus.filter(s => !q || normKey(S_FIELDS.map(f => s[f[0]]).join(' ')).includes(q));
+  document.getElementById('sTbl').innerHTML = '<tr>' + S_FIELDS.map(f => `<th${f[2] ? ' class="n"' : ''}>${f[1]}</th>`).join('') + '</tr>' +
+    rows.slice(0, 600).map(s => `<tr class="click" data-i="${skus.indexOf(s)}">` + S_FIELDS.map(([k, , t]) => t ? `<td class="n">${fmt2(s[k])}</td>` : `<td>${esc(s[k])}</td>`).join('') + '</tr>').join('') +
+    `<tr><td colspan="${S_FIELDS.length}" class="muted">${fmt0(rows.length)} SKUs</td></tr>`;
+  document.querySelectorAll('#sTbl tr.click').forEach(tr => tr.onclick = () => { fillForm(S_FIELDS, 's', skus[+tr.dataset.i]); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+}
+document.getElementById('sQ').oninput = drawSkus;
+document.getElementById('sNew').onclick = () => fillForm(S_FIELDS, 's', null);
+document.getElementById('sSave').onclick = async () => {
+  const r = readForm(S_FIELDS, 's');
+  if (!r.sku_code) return toast('SKU Code is needed', 'err');
+  r.size_ml = sizeOf(r.size || '');
+  r.updated_at = new Date().toISOString();
+  const { error } = await sb.from('skus').upsert(r, { onConflict: 'sku_code' });
+  if (error) return toast(error.message, 'err');
+  toast('Saved ' + r.sku_code, 'ok'); loadSkus();
+};
+
+/* ── wholesalers ── */
+async function loadWs() {
+  const { data, error } = await sb.from('wholesalers').select('*').order('name');
+  if (error) return toast(error.message, 'err');
+  document.getElementById('wTbl').innerHTML = '<tr><th>Wholesaler</th><th>Layout</th><th>Used on the Import page</th><th></th></tr>' +
+    data.map(w => `<tr><td>${esc(w.name)}</td><td>${w.config && w.config.layout ? esc(w.config.layout) + (w.config.sheet ? ' · sheet ' + esc(w.config.sheet) : '') : '<span class="muted">not set yet</span>'}</td>
+      <td><input type="checkbox" data-n="${esc(w.name)}" class="act"${w.active ? ' checked' : ''}></td>
+      <td><button class="btn small gray" data-n="${esc(w.name)}">Forget layout</button></td></tr>`).join('');
+  document.querySelectorAll('#wTbl .act').forEach(cb => cb.onchange = async () => {
+    const { error } = await sb.from('wholesalers').update({ active: cb.checked }).eq('name', cb.dataset.n);
+    toast(error ? error.message : 'Saved', error ? 'err' : 'ok');
+  });
+  document.querySelectorAll('#wTbl button').forEach(b => b.onclick = async () => {
+    const { error } = await sb.from('wholesalers').update({ layout: 'table', config: {} }).eq('name', b.dataset.n);
+    toast(error ? error.message : 'Layout forgotten', error ? 'err' : 'ok'); loadWs();
+  });
+}
+
+/* ── load from the Off-take Excel ── */
+const drop = document.getElementById('drop');
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) loadOfftakeFile(e.dataTransfer.files[0]); };
+document.getElementById('file').onchange = e => { if (e.target.files[0]) loadOfftakeFile(e.target.files[0]); e.target.value = ''; };
+
+const HEAD = { 'code': 'code', 'outlets': 'outlets', 'group': 'group_name', 'current team': 'current_team', 'current bde': 'current_bde', 'bde': 'bde',
+  'area': 'area', 'wholesaler': 'wholesaler', 'sku company': 'sku_company', 'sku code': 'sku_code', 'principle': 'principle', 'category': 'category',
+  'brand': 'brand', 'product': 'product', 'size': 'size', 'packing': 'packing', 'price inc.vat': 'price_inc', 'price exc.vat': 'price_exc',
+  'vol. btls.': 'vol_btls', 'total price inc.vat': 'total_inc', 'total price exc.vat': 'total_exc', 'direct price exc.vat': 'direct_price_exc',
+  'total direct price exc.vat': 'total_direct_exc', 'received month': 'received_month', 'liter': 'liter' };
+const NUMS = new Set(['packing', 'price_inc', 'price_exc', 'vol_btls', 'total_inc', 'total_exc', 'direct_price_exc', 'total_direct_exc', 'liter']);
+const clean = v => { const s = String(v == null ? '' : v).trim(); return s === '' ? null : s; };
+
+async function loadOfftakeFile(f) {
+  const msg = document.getElementById('loadMsg'), bar = document.getElementById('loadBar'), withHist = document.getElementById('withHist').checked;
+  const step = (t, p) => { msg.textContent = t; if (p != null) { bar.hidden = false; bar.firstChild.style.width = p + '%'; } };
+  try {
+    step('Opening ' + f.name + '…', 2);
+    const buf = await f.arrayBuffer();
+    const names = XLSX.read(buf, { type: 'array', bookSheets: true }).SheetNames;
+    const name = names.find(n => /data_total off-take/i.test(n)) || names.find(n => /total off-take/i.test(n));
+    if (!name) throw new Error('No sheet "Data_Total Off-Take" in this file');
+    step('Reading sheet ' + name + ' (this can take a minute)…', 5);
+    await new Promise(r => setTimeout(r, 30));
+    const wb = XLSX.read(buf, { type: 'array', sheets: [name], dense: true });
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: '' });
+    const h = aoa.findIndex(r => r.some(v => normKey(v) === 'sku code') && r.some(v => normKey(v) === 'code'));
+    if (h < 0) throw new Error('Header row (Code … SKU Code …) not found');
+    const map = aoa[h].map(v => HEAD[normKey(v)] || null);
+    const rows = [];
+    for (let i = h + 1; i < aoa.length; i++) {
+      const r = aoa[i], o = { batch_id: null };
+      map.forEach((k, j) => { if (k) o[k] = NUMS.has(k) ? toNum(r[j]) : clean(r[j]); });
+      if (!o.code && !o.sku_code) continue;
+      const d = toISODate(o.received_month);
+      o.received_month = d ? d.slice(0, 7) + '-01' : null;
+      rows.push(o);
+    }
+    step(`${fmt0(rows.length)} rows read. Updating outlets and SKUs…`, 15);
+
+    /* the latest row of each outlet / SKU wins */
+    const lastO = {}, lastS = {}, wsSet = new Set();
+    rows.forEach(r => {
+      if (r.wholesaler) wsSet.add(r.wholesaler);
+      if (r.code && (!lastO[r.code] || (r.received_month || '') >= (lastO[r.code].received_month || ''))) lastO[r.code] = r;
+      if (r.sku_code && (!lastS[r.sku_code] || (r.received_month || '') >= (lastS[r.sku_code].received_month || ''))) lastS[r.sku_code] = r;
+    });
+    const now = new Date().toISOString();
+    const oRows = Object.values(lastO).map(r => ({ code: r.code, outlet_name: r.outlets, group_name: r.group_name, team: r.current_team, bde: r.current_bde, area: r.area, active: true, updated_at: now }));
+    const sRows = Object.values(lastS).map(r => ({ sku_code: r.sku_code, sku_company: r.sku_company, principle: r.principle, category: r.category, brand: r.brand,
+      product: r.product, size: r.size, size_ml: sizeOf(r.size || ''), packing: r.packing, price_inc: r.price_inc, price_exc: r.price_exc, direct_price_exc: r.direct_price_exc, active: true, updated_at: now }));
+    await writeChunks('outlets', oRows, { onConflict: 'code' });
+    await writeChunks('skus', sRows, { onConflict: 'sku_code' });
+    await writeChunks('wholesalers', [...wsSet].map(n => ({ name: n })), { onConflict: 'name', ignoreDuplicates: true });
+    let note = `${fmt0(oRows.length)} outlets, ${fmt0(sRows.length)} SKUs and ${wsSet.size} wholesalers updated.`;
+
+    if (withHist) {
+      step(note + ' Removing the old history…', 22);
+      const { error } = await sb.from('offtake').delete().is('batch_id', null);
+      if (error) throw error;
+      await writeChunks('offtake', rows, null, (n, t) => step(`${note} Loading history ${fmt0(n)} / ${fmt0(t)}…`, 22 + 78 * n / t), 1000);
+      note += ` ${fmt0(rows.length)} history rows loaded.`;
+    }
+    step(note, 100);
+    toast('Done', 'ok');
+    loadOutlets(); loadSkus(); loadWs();
+  } catch (e) {
+    step('Stopped: ' + e.message);
+    toast(e.message, 'err');
+  }
+}
+</script>
+</body>
+</html>

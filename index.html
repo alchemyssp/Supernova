@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supernova Off-take</title>
+<link rel="icon" href="img/logo-64.png">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600&family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=1">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js?v=1"></script>
+<script src="js/common.js?v=1"></script>
+</head>
+<body class="login">
+<div class="login-box">
+  <img src="img/logo-192.png" alt="">
+  <h1 style="margin-top:12px">Supernova</h1>
+  <p class="sub">Off-take from wholesaler reports</p>
+  <div class="card">
+    <label for="passcode">Passcode</label>
+    <input type="password" id="passcode" autocomplete="current-password" autofocus>
+    <button class="btn" id="go" style="width:100%;margin-top:14px">Sign in</button>
+    <p id="msg" class="err" style="margin:10px 0 0;min-height:1.6em"></p>
+  </div>
+</div>
+<script>
+sb.auth.getSession().then(({ data }) => { if (data.session) location.replace('import.html'); });
+async function login() {
+  const pass = document.getElementById('passcode').value;
+  const msg = document.getElementById('msg'), b = document.getElementById('go');
+  if (!pass) { msg.textContent = 'Please enter the passcode'; return; }
+  b.disabled = true; b.textContent = 'Signing in…'; msg.textContent = '';
+  const { error } = await sb.auth.signInWithPassword({ email: SHARED_ACCOUNT_EMAIL, password: pass });
+  b.disabled = false; b.textContent = 'Sign in';
+  if (error) { msg.textContent = /invalid/i.test(error.message) ? 'Incorrect passcode' : error.message; return; }
+  location.replace('import.html');
+}
+document.getElementById('go').onclick = login;
+document.getElementById('passcode').onkeydown = e => { if (e.key === 'Enter') login(); };
+</script>
+</body>
+</html>

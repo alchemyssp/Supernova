@@ -24,10 +24,10 @@ main { padding: 28px 32px 60px; max-width: 1500px; }
   background: linear-gradient(180deg, var(--sb1), var(--sb2)); color: #fff;
   display: flex; flex-direction: column; padding: 22px 14px;
 }
-.side .brand { display: flex; gap: 10px; align-items: center; padding: 0 8px 22px; }
-.side .brand img { width: 40px; height: 40px; border-radius: 10px; background: #fff; }
-.side .brand b { display: block; font-size: 20px; }
-.side .brand small { opacity: .8; }
+/* the Supernova's wordmark sits on its own off-white paper colour */
+.side .brand { padding: 0 4px 22px; text-align: center; }
+.side .brand img { display: block; width: 100%; border-radius: 14px; background: #F9F8F4; padding: 8px 12px; }
+.side .brand small { display: block; margin-top: 8px; opacity: .85; }
 .side nav { display: flex; flex-direction: column; gap: 4px; }
 .side nav a { color: #fff; text-decoration: none; padding: 10px 14px; border-radius: 12px; opacity: .88; }
 .side nav a:hover { background: rgba(255, 255, 255, .12); opacity: 1; }
@@ -94,7 +94,8 @@ td input, td select { padding: 6px 10px; font-size: 13.5px; }
 
 /* login */
 .login-box { max-width: 380px; margin: 12vh auto 0; text-align: center; }
-.login-box img { width: 72px; border-radius: 16px; }
+.login-box .wordmark { margin: 0 0 6px; }
+.login-box .wordmark img { width: 100%; max-width: 340px; border-radius: 18px; background: #F9F8F4; padding: 10px 16px; }
 .login-box .card { text-align: left; margin-top: 18px; }
 
 @media (max-width: 900px) {

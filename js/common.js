@@ -21,7 +21,7 @@ function renderNav() {
   const side = document.createElement('aside');
   side.className = 'side';
   side.innerHTML =
-    '<div class="brand"><img src="img/logo-64.png" alt=""><div><b>Supernova</b><small>Off-take</small></div></div>' +
+    '<div class="brand"><img src="img/supernovas-wordmark.png" alt="Supernova\'s"><small>Off-take</small></div>' +
     '<nav>' + NAV.map(([href, label]) =>
       `<a href="${href}"${href === here ? ' class="on"' : ''}>${label}</a>`).join('') + '</nav>' +
     '<button class="link signout" type="button">Sign out</button>';

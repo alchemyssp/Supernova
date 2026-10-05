@@ -3,10 +3,9 @@
 // ============================================================
 
 const NAV = [
-  ['import.html',  'Import WS report'],
-  ['matching.html', 'Matching'],
-  ['offtake.html', 'Off-take'],
-  ['masters.html', 'Masters']
+  ['import.html',   'Import WS report'],
+  ['forms.html',    'Off-take forms'],
+  ['settings.html', 'Settings']
 ];
 
 /* every page except the login: no session -> back to the login */
@@ -91,15 +90,18 @@ async function writeChunks(table, rows, opts, onProgress, size = 500) {
 }
 
 /* ── similarity for match suggestions (word overlap + same bottle size) ── */
+const SIZE_RE = /(\d+(?:\.\d+)?)\s*(ml|cl|ltr|lt|litre|liter|l)\b\.?/;
 function words(s) {
   return normKey(s)
+    .replace(new RegExp(SIZE_RE.source, 'g'), ' ')        // bottle size is compared on its own (sizeOf)
+    .replace(/\d+(\.\d+)?\s*%/g, ' ')                     // alcohol %
     .replace(/บริษัท|จำกัด|จํากัด|มหาชน|สำนักงานใหญ่|สาขา(ที่)?/g, ' ')
     .replace(/\b(co|ltd|limited|company|the|headquarter|branch)\b/g, ' ')
     .replace(/[^a-z0-9฀-๿]+/g, ' ')
-    .split(' ').filter(w => w.length > 1);
+    .split(' ').filter(w => w.length > 1 || /\d/.test(w));
 }
 function sizeOf(s) {
-  const m = normKey(s).replace(/\s/g, '').match(/(\d+(?:\.\d+)?)(ml|cl|l|lt|ltr)\b/);
+  const m = normKey(s).match(SIZE_RE);
   if (!m) return null;
   const n = parseFloat(m[1]);
   return m[2] === 'ml' ? n : m[2] === 'cl' ? n * 10 : n * 1000;
@@ -115,6 +117,17 @@ function similarity(A, B) {
   });
   let score = (2 * hit) / (A.w.size + B.w.size);
   if (A.size && B.size) score += A.size === B.size ? 0.15 : -0.25;
+  return score;
+}
+/* WS product names are short ("Campari", "Tito"): how much of the WS name is found in the SKU counts most;
+   no size in the WS name = the usual 700 / 750 ml bottle */
+function productScore(A, B) {
+  if (!A.w.size || !B.w.size) return 0;
+  let hit = 0;
+  A.w.forEach(w => { if (B.w.has(w)) hit++; else if (w.length > 3) for (const x of B.w) { if (x.length > 3 && (x.startsWith(w) || w.startsWith(x))) { hit += 0.7; break; } } });
+  let score = 0.6 * (hit / A.w.size) + 0.4 * (2 * hit) / (A.w.size + B.w.size);
+  if (A.size && B.size) score += A.size === B.size ? 0.15 : -0.25;
+  else if (!A.size && (B.size === 700 || B.size === 750)) score += 0.05;
   return score;
 }
 /* list items carry ._p = prep(name) */

@@ -1,23 +1,29 @@
-﻿# Supernova — Off-take from wholesaler reports
+# Supernova — WS reports -> Off-Take & Outlet Rebate Calculation forms
 
 Static site (HTML + vanilla JS, no build) on Vercel, data in Supabase project **Supernova**.
 
-## Monthly flow
-1. **Import WS report** (import.html) — choose the wholesaler + month, drop the WS file. The layout is read
-   (table / grouped / BOOZIA report); the column letters are saved per WS so next month it just reads.
-2. **Matching** (matching.html) — each WS customer -> Outlet Code, each WS product -> SKU Code (+ bottles per unit).
-   Saved in customer_map / product_map and reused every month. Suggestions come from name similarity
-   and from the same name already matched at another WS.
-3. **Send to Off-take** — RPC confirm_batch(): matched lines -> offtake, priced with the SKU master
-   (Price INC/EXC, Direct price, Liter). Replaces what that WS already had for that month.
-4. **Off-take** (offtake.html) — filters + Export Excel in the 25 columns of "Data_Total Off-Take".
-   Current Team / Current BDE always come from today's outlet master.
+## Pages
+1. **Import WS report** (import.html)
+   - Step 1: wholesaler + month + file. The layout is read (table / grouped / BOOZIA report, js/parsers.js) and
+     saved per WS. Uploading the same WS + month again replaces it.
+   - Step 2: each WS customer -> Data U outlet, each WS product -> form SKU (js/match.js). Remembered answers
+     are used again; otherwise the closest name is picked ("Auto — check") or left "Not found". Save keeps them.
+2. **Off-take forms** (forms.html) — outlets with bottles per month; "Download form" fills
+   templates/offtake_form.xlsx for that outlet and year (js/form-fill.js):
+   INDEX C3/C5/C7/C9 (outlet, legal name, BDE, area), C15/C17 (1 Jan – 31 Dec), and on sheets 01–12 per SKU row
+   J Wholesaler, K Price Inc. VAT or L Price Ex. VAT (per WS setting), N Vol. (Btls.). Formulas are untouched;
+   Excel recalculates on open. Several WS for one SKU in a month: bottles added, the biggest WS named, price
+   weighted. No WS price: the direct price of the MAPPING sheet goes in L.
+3. **Settings** (settings.html) — upload Data U ("New Data Universe_<date>.xlsm", sheets Outlet + Filter,
+   js/datau.js); per wholesaler: price Inc./Ex. VAT, saved layout, shown on Import.
 
-## Masters (masters.html)
-Outlets, SKUs, wholesalers. "Load from Off-take file" reads sheet Data_Total Off-Take of
-"Actual Off-Take by SKUs JAN 24 - <MON> 26.xlsx": updates outlets + SKUs (latest row wins) and,
-optionally, replaces the history rows (offtake.batch_id is null).
+## Template
+templates/offtake_form.xlsx = "Off-Take & Outlet Rebate Calculation - ALC_BBC - 22 SEP 26.xlsx" with one fix:
+WHOLESALE!L2836 read '08' (August twice, September never) -> '09'.
+templates/form_skus.json = the SKU rows of the month sheets (row 13–500, code, product, size, direct price);
+rows after 394 are not added up by the form's own formulas (calc = false).
+If the form changes, copy the new file in and rebuild form_skus.json from sheet 01 column B + MAPPING.
 
 ## Setup
-- database/schema.sql — tables, view offtake_v, RPCs, RLS (signed-in only)
+- database/schema.sql — tables, view form_lines, RPC form_outlets, RLS (signed-in only), wholesaler list
 - js/config.js — Supabase URL + anon key, SHARED_ACCOUNT_EMAIL (the passcode = that account's password)

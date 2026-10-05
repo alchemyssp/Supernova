@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Off-take Forms</title>
+<link rel="icon" href="img/supernovas-64.png">
+<link rel="apple-touch-icon" href="img/supernovas-192.png">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600&family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=3">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="js/config.js?v=1"></script>
+<script src="js/common.js?v=3"></script>
+<script src="js/form-fill.js?v=1"></script>
+</head>
+<body>
+<main>
+  <h1>Off-take forms</h1>
+  <p class="sub">Every outlet that bought through a wholesaler. Download gives the "Off-Take &amp; Outlet Rebate Calculation" file of that outlet, with Wholesaler, Price and Vol. (Btls.) filled in for each month.</p>
+
+  <div class="card">
+    <div class="row">
+      <div style="flex:0 0 140px"><label for="year">Year</label><select id="year"></select></div>
+      <div><label for="q">Search outlet</label><input type="search" id="q" placeholder="Outlet name, code, BDE, area"></div>
+      <div style="flex:0 0 auto"><label for="bde">BDE</label><select id="bde"></select></div>
+    </div>
+  </div>
+
+  <div class="grid kpis" id="kpis"></div>
+
+  <div class="card">
+    <div class="tbl-wrap"><table id="tbl"></table></div>
+  </div>
+</main>
+
+<script>
+let OUTLETS = {}, SKUS = [], SKU = {}, rows = [];
+
+(async () => {
+  if (!await requireLogin()) return;
+  renderNav();
+  const y = new Date().getFullYear();
+  document.getElementById('year').innerHTML = [y, y - 1, y - 2].map(v => `<option>${v}</option>`).join('');
+  const [os, sk] = await Promise.all([
+    fetchAll(() => sb.from('outlets').select('*').order('code')),
+    fetch('templates/form_skus.json?v=1').then(r => r.json())
+  ]);
+  os.forEach(o => OUTLETS[o.code] = o);
+  SKUS = sk; sk.forEach(s => SKU[s.code] = s);
+  document.getElementById('year').onchange = load;
+  document.getElementById('q').oninput = draw;
+  document.getElementById('bde').onchange = draw;
+  load();
+})();
+
+async function load() {
+  const { data, error } = await sb.rpc('form_outlets', { p_year: +document.getElementById('year').value });
+  if (error) return toast(error.message, 'err');
+  const by = {};
+  data.forEach(r => {
+    const o = by[r.outlet_code] = by[r.outlet_code] || { code: r.outlet_code, months: {}, btls: 0 };
+    o.months[+r.month.slice(5, 7)] = +r.btls; o.btls += +r.btls;
+  });
+  rows = Object.values(by).map(r => Object.assign(r, { o: OUTLETS[r.code] || { code: r.code } })).sort((a, b) => b.btls - a.btls);
+  const bdes = [...new Set(rows.map(r => r.o.current_bde || r.o.bde).filter(Boolean))].sort();
+  document.getElementById('bde').innerHTML = '<option value="">All</option>' + bdes.map(b => `<option>${esc(b)}</option>`).join('');
+  draw();
+}
+
+function draw() {
+  const q = normKey(document.getElementById('q').value), bde = document.getElementById('bde').value;
+  const list = rows.filter(r => (!bde || (r.o.current_bde || r.o.bde) === bde) &&
+    (!q || normKey([r.code, r.o.outlet_name, r.o.company_name, r.o.current_bde, r.o.area].join(' ')).includes(q)));
+  const months = [...new Set(list.flatMap(r => Object.keys(r.months).map(Number)))].sort((a, b) => a - b);
+  document.getElementById('kpis').innerHTML =
+    `<div class="kpi"><small>Outlets</small><b>${fmt0(list.length)}</b></div>` +
+    `<div class="kpi"><small>Bottles</small><b>${fmt0(list.reduce((a, r) => a + r.btls, 0))}</b></div>`;
+  document.getElementById('tbl').innerHTML =
+    '<tr><th>Outlet</th><th>Code</th><th>BDE</th><th>Area</th>' + months.map(m => `<th class="n">${MONTHS[m - 1]}</th>`).join('') + '<th class="n">Total</th><th></th></tr>' +
+    (list.length ? list.slice(0, 500).map(r => `<tr><td>${esc(r.o.outlet_name || '(not in Data U)')}</td><td class="muted">${esc(r.code)}</td>
+      <td>${esc(r.o.current_bde || r.o.bde || '')}</td><td>${esc(r.o.area || '')}</td>` +
+      months.map(m => `<td class="n">${fmt0(r.months[m])}</td>`).join('') +
+      `<td class="n"><b>${fmt0(r.btls)}</b></td><td><button class="btn small" data-code="${esc(r.code)}">Download form</button></td></tr>`).join('')
+      : '<tr><td colspan="6" class="muted">No outlet has off-take this year yet — import a WS report first.</td></tr>');
+  document.querySelectorAll('#tbl button[data-code]').forEach(b => b.onclick = () => download(b.dataset.code, b));
+}
+
+async function download(code, btn) {
+  const year = +document.getElementById('year').value;
+  btn.disabled = true; btn.textContent = 'Preparing…';
+  try {
+    const lines = await fetchAll(() => sb.from('form_lines').select('month, wholesaler, price_vat, sku_code, btls, price_per_btl')
+      .eq('outlet_code', code).gte('month', year + '-01-01').lte('month', year + '-12-01'));
+    const fr = formRows(lines, SKU);
+    const outside = fr.filter(r => !SKU[r.code]).length, noCalc = fr.filter(r => SKU[r.code] && !SKU[r.code].calc).length;
+    const o = OUTLETS[code] || { code };
+    const blob = await buildOutletForm(o, year, fr, SKUS);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `Off-Take & Outlet Rebate Calculation - ${(o.outlet_name || code).replace(/[\\/:*?"<>|]/g, ' ')} - ${year}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    const warn = [outside && `${outside} SKU(s) are not in the form`, noCalc && `${noCalc} SKU(s) sit below row 394, where the form does not add them up`].filter(Boolean).join(' · ');
+    toast(warn ? 'Downloaded. Note: ' + warn : 'Downloaded', warn ? '' : 'ok');
+  } catch (e) { toast('Could not make the form: ' + e.message, 'err'); }
+  btn.disabled = false; btn.textContent = 'Download form';
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings</title>
+<link rel="icon" href="img/supernovas-64.png">
+<link rel="apple-touch-icon" href="img/supernovas-192.png">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600&family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=3">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="js/config.js?v=1"></script>
+<script src="js/common.js?v=3"></script>
+<script src="js/datau.js?v=1"></script>
+</head>
+<body>
+<main>
+  <h1>Settings</h1>
+  <p class="sub">The outlet list (Data U) and how each wholesaler's price goes into the form.</p>
+
+  <div class="card">
+    <h2>Data U</h2>
+    <p class="muted" style="margin-top:-6px" id="duInfo"></p>
+    <label class="drop" id="drop"><input type="file" id="file" accept=".xlsx,.xlsm"><b>Upload the Data U file</b> — "New Data Universe_&lt;date&gt;.xlsm" (sheets Outlet + Filter)</label>
+    <p id="duMsg" class="muted" style="margin:12px 0 6px"></p>
+    <div class="bar" hidden id="duBar"><i></i></div>
+  </div>
+
+  <div class="card">
+    <h2>Wholesalers</h2>
+    <p class="muted" style="margin-top:-6px">"Price in the report" tells which column of the form gets the WS price: Inc. VAT goes to column K, Ex. VAT to column L.</p>
+    <div class="row" style="margin-bottom:12px">
+      <div style="flex:0 0 auto"><button class="btn gray" id="addWs" type="button">+ Add wholesaler</button></div>
+    </div>
+    <div class="tbl-wrap"><table id="wTbl"></table></div>
+  </div>
+</main>
+
+<script>
+(async () => {
+  if (!await requireLogin()) return;
+  renderNav();
+  loadInfo(); loadWs();
+})();
+
+async function loadInfo() {
+  const { count } = await sb.from('outlets').select('code', { count: 'exact', head: true });
+  const { data } = await sb.from('outlets').select('updated_at').order('updated_at', { ascending: false }).limit(1);
+  document.getElementById('duInfo').textContent = count
+    ? `${fmt0(count)} outlets · last upload ${new Date(data[0].updated_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}`
+    : 'No Data U yet — upload the latest file.';
+}
+
+async function loadWs() {
+  const [{ data, error }, { data: used }] = await Promise.all([
+    sb.from('wholesalers').select('*').order('name'),
+    sb.from('import_batches').select('wholesaler')
+  ]);
+  if (error) return toast(error.message, 'err');
+  const n = {}; (used || []).forEach(b => n[b.wholesaler] = (n[b.wholesaler] || 0) + 1);
+  data.sort((a, b) => (n[b.name] || 0) - (n[a.name] || 0) || a.name.localeCompare(b.name));
+  document.getElementById('wTbl').innerHTML = '<tr><th>Wholesaler</th><th>Region</th><th>Price in the report</th><th>File layout</th><th class="n">Reports</th><th>Show on Import</th></tr>' +
+    data.map(w => `<tr><td>${esc(w.name)}</td><td>${esc(w.region || '')}</td>
+      <td><select data-n="${esc(w.name)}" class="vat" style="width:auto"><option value="exc"${w.price_vat === 'exc' ? ' selected' : ''}>Ex. VAT → column L</option><option value="inc"${w.price_vat === 'inc' ? ' selected' : ''}>Inc. VAT → column K</option></select></td>
+      <td>${w.config && w.config.layout ? esc(w.config.layout) + ' <button class="link" data-n="' + esc(w.name) + '">forget</button>' : '<span class="muted">read on first import</span>'}</td>
+      <td class="n">${fmt0(n[w.name] || 0)}</td>
+      <td><input type="checkbox" class="act" data-n="${esc(w.name)}"${w.active ? ' checked' : ''}></td></tr>`).join('');
+  const save = async (name, patch) => {
+    const { error } = await sb.from('wholesalers').update(Object.assign({ updated_at: new Date().toISOString() }, patch)).eq('name', name);
+    toast(error ? error.message : 'Saved', error ? 'err' : 'ok');
+  };
+  document.querySelectorAll('#wTbl .vat').forEach(s => s.onchange = () => save(s.dataset.n, { price_vat: s.value }));
+  document.querySelectorAll('#wTbl .act').forEach(c => c.onchange = () => save(c.dataset.n, { active: c.checked }));
+  document.querySelectorAll('#wTbl button.link').forEach(b => b.onclick = async () => { await save(b.dataset.n, { layout: 'table', config: {} }); loadWs(); });
+}
+
+document.getElementById('addWs').onclick = async () => {
+  const name = (prompt('Wholesaler name, as it should appear in the Wholesaler column of the form') || '').trim();
+  if (!name) return;
+  const { error } = await sb.from('wholesalers').upsert({ name }, { onConflict: 'name', ignoreDuplicates: true });
+  if (error) return toast(error.message, 'err');
+  toast('Added ' + name, 'ok'); loadWs();
+};
+
+/* ── Data U ── */
+const drop = document.getElementById('drop');
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) uploadDataU(e.dataTransfer.files[0]); };
+document.getElementById('file').onchange = e => { if (e.target.files[0]) uploadDataU(e.target.files[0]); e.target.value = ''; };
+
+async function uploadDataU(f) {
+  const msg = document.getElementById('duMsg'), bar = document.getElementById('duBar');
+  const step = (t, p) => { msg.textContent = t; if (p != null) { bar.hidden = false; bar.firstChild.style.width = p + '%'; } };
+  try {
+    step('Reading ' + f.name + ' — a big file takes up to a minute…', 5);
+    await new Promise(r => setTimeout(r, 50));
+    const outlets = readDataU(await f.arrayBuffer());
+    if (!outlets.length) throw new Error('No outlets found (sheets "Outlet" / "Filter" with an "Outlet Code" column)');
+    const now = new Date().toISOString();
+    outlets.forEach(o => o.updated_at = now);
+    await writeChunks('outlets', outlets, { onConflict: 'code' }, (n, t) => step(`Saving outlets ${fmt0(n)} / ${fmt0(t)}…`, 10 + 90 * n / t));
+    step(`Done — ${fmt0(outlets.length)} outlets from ${f.name}.`, 100);
+    toast('Data U updated', 'ok'); loadInfo();
+  } catch (e) { step('Stopped: ' + e.message); toast(e.message, 'err'); }
+}
+</script>
+</body>
+</html>

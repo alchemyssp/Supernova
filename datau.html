@@ -7,17 +7,16 @@
 <link rel="icon" href="img/supernovas-64.png">
 <link rel="apple-touch-icon" href="img/supernovas-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&family=Noto+Sans+Thai:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/app.css?v=6">
+<link rel="stylesheet" href="css/app.css?v=7">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="js/config.js?v=1"></script>
-<script src="js/common.js?v=6"></script>
+<script src="js/common.js?v=7"></script>
 <script src="js/datau.js?v=1"></script>
 </head>
 <body>
 <main>
-  <h1>Data U</h1>
-  <p class="sub">The outlet master used to identify WS customers. Upload the newest "New Data Universe_&lt;date&gt;.xlsm" whenever it changes.</p>
+  <h1 style="margin-bottom:22px">Data U</h1>
 
   <div class="grid kpis" id="kpis"></div>
 
@@ -90,7 +89,7 @@ function draw() {
     (!q || normKey([o.code, o.outlet_name, o.company_name, o.group_name].join(' ')).includes(q)));
   const shown = rows.slice(page * PAGE, page * PAGE + PAGE);
   document.getElementById('tbl').innerHTML = '<tr>' + COLS.map(c => `<th>${c[1]}</th>`).join('') + '<th>Bought via WS</th></tr>' +
-    (shown.length ? shown.map(o => '<tr>' + COLS.map(([k]) => `<td${k === 'code' ? ' class="muted"' : ''}>${esc(o[k])}</td>`).join('') +
+    (shown.length ? shown.map(o => '<tr>' + COLS.map(([k]) => `<td${k === 'code' ? ' class="muted nowrap"' : ''}>${esc(o[k])}</td>`).join('') +
       `<td>${linked[o.code] ? [...linked[o.code]].map(w => `<span class="pill">${esc(w)}</span>`).join(' ') : ''}</td></tr>`).join('')
       : `<tr><td colspan="${COLS.length + 1}" class="muted">No outlet found.</td></tr>`);
   document.getElementById('pageInfo').textContent = rows.length ? `${fmt0(page * PAGE + 1)}–${fmt0(Math.min(rows.length, (page + 1) * PAGE))} of ${fmt0(rows.length)}` : '';

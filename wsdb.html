@@ -7,31 +7,35 @@
 <link rel="icon" href="img/supernovas-64.png">
 <link rel="apple-touch-icon" href="img/supernovas-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&family=Noto+Sans+Thai:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/app.css?v=6">
+<link rel="stylesheet" href="css/app.css?v=7">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="js/config.js?v=1"></script>
-<script src="js/common.js?v=6"></script>
+<script src="js/common.js?v=7"></script>
 <script src="js/match.js?v=3"></script>
 <script src="templates/form_skus.js?v=1"></script>
-<style> td.pick { min-width: 280px; } .factor { width: 70px; } </style>
+<style>
+  .wsbar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+  .wsbar button { border: 0; background: var(--glass); color: var(--muted); padding: 7px 14px; border-radius: 99px; cursor: pointer; font-size: 13px; }
+  .wsbar button.on { background: var(--white); color: var(--ink); }
+  .wsbar button small { opacity: .7; margin-left: 4px; }
+</style>
 </head>
 <body>
 <main>
-  <h1>WS Database</h1>
-  <p class="sub">What each wholesaler calls a customer or a product, and what it is in Data U / the Off-take form. Used every month to identify the reports.</p>
+  <h1 style="margin-bottom:22px">WS Database</h1>
 
   <div class="tabs">
-    <button type="button" data-tab="outlets" class="on">Outlets</button>
+    <button type="button" data-tab="outlets" class="on">Customers</button>
     <button type="button" data-tab="products">Products</button>
   </div>
 
+  <div class="wsbar" id="wsbar"></div>
   <div class="grid kpis" id="kpis"></div>
 
   <div class="card">
     <div class="row" style="margin-bottom:14px">
-      <div><label for="ws">Wholesaler</label><select id="ws"></select></div>
-      <div><label for="st">Status</label><select id="st"><option value="">All</option><option value="linked">Linked</option><option value="none">Not linked yet</option><option value="skip">Skipped</option></select></div>
-      <div style="flex:2 1 260px"><label for="q">Search</label><input type="search" id="q" placeholder="Name in the report, code, Data U name"></div>
+      <div style="flex:0 0 200px"><label for="st">Status</label><select id="st"><option value="">All</option><option value="linked">Linked</option><option value="none">Not linked yet</option><option value="skip">Skipped</option></select></div>
+      <div style="flex:2 1 260px"><label for="q">Search</label><input type="search" id="q" placeholder="Customer code, name, shop, Data U code or name"></div>
       <div style="flex:0 0 auto"><label>&nbsp;</label><button class="btn" id="save" type="button">Save changes</button></div>
     </div>
     <div class="tbl-wrap"><table id="tbl"></table></div>
@@ -42,8 +46,8 @@
 <datalist id="dlSkus"></datalist>
 
 <script>
-let tab = location.hash === '#products' ? 'products' : 'outlets';
-let C = [], P = [];   // one row per WS + name (linked, skipped or not linked yet)
+let tab = location.hash === '#products' ? 'products' : 'outlets', wsPick = '';
+let C = [], P = [];   // one row per WS + name: linked, skipped or not linked yet
 
 (async () => {
   if (!await requireLogin()) return;
@@ -53,7 +57,7 @@ let C = [], P = [];   // one row per WS + name (linked, skipped or not linked ye
   document.getElementById('dlSkus').innerHTML = M.skus.map(s => `<option value="${esc(s._label)}">`).join('');
   await load();
   setTab(tab);
-  ['ws', 'st'].forEach(id => document.getElementById(id).onchange = draw);
+  document.getElementById('st').onchange = draw;
   document.getElementById('q').oninput = draw;
 })();
 
@@ -61,61 +65,82 @@ async function load() {
   const [cm, pm, bs, ls] = await Promise.all([
     fetchAll(() => sb.from('customer_map').select('*')),
     fetchAll(() => sb.from('product_map').select('*')),
-    fetchAll(() => sb.from('import_batches').select('id, wholesaler')),
-    fetchAll(() => sb.from('ws_lines').select('batch_id, customer_key, customer_raw, outlet_raw, product_key, product_raw, qty'))
+    fetchAll(() => sb.from('import_batches').select('id, wholesaler, month')),
+    fetchAll(() => sb.from('ws_lines').select('batch_id, customer_key, customer_code, customer_raw, outlet_raw, product_key, product_code, product_raw, qty'))
   ]);
   const wsOf = {}; bs.forEach(b => wsOf[b.id] = b.wholesaler);
-  const mk = (map, keyF, rows) => {
-    const by = {};
-    map.forEach(m => by[m.wholesaler + '|' + m[keyF]] = { ws: m.wholesaler, key: m[keyF], name: m.raw_name || m[keyF], value: keyF === 'customer_key' ? m.outlet_code : m.sku_code, skip: m.skip, factor: m.factor, qty: 0, saved: true });
-    rows.forEach(r => {
-      const k = r.ws + '|' + r.key;
-      if (!by[k]) by[k] = { ws: r.ws, key: r.key, name: r.name, value: null, skip: false, factor: 1, qty: 0, saved: false };
-      by[k].qty += +r.qty || 0;
-    });
-    return Object.values(by);
-  };
-  C = mk(cm, 'customer_key', ls.map(l => ({ ws: wsOf[l.batch_id], key: l.customer_key, name: l.customer_raw + (l.outlet_raw ? ' | ' + l.outlet_raw : ''), qty: l.qty })));
-  P = mk(pm, 'product_key', ls.map(l => ({ ws: wsOf[l.batch_id], key: l.product_key, name: l.product_raw, qty: l.qty })));
-  const wss = [...new Set([...C, ...P].map(r => r.ws))].sort();
-  document.getElementById('ws').innerHTML = '<option value="">All wholesalers</option>' + wss.map(w => `<option>${esc(w)}</option>`).join('');
+  /* customers: saved answers + every name seen in the reports */
+  const byC = {};
+  cm.forEach(m => byC[m.wholesaler + '|' + m.customer_key] = {
+    ws: m.wholesaler, key: m.customer_key, code: m.customer_code || '', name: m.customer_name || (m.raw_name || '').split(' | ')[0],
+    shop: m.ws_outlet_name || (m.raw_name || '').split(' | ')[1] || '', value: m.outlet_code, skip: m.skip, qty: 0 });
+  ls.forEach(l => {
+    const k = wsOf[l.batch_id] + '|' + l.customer_key;
+    const r = byC[k] = byC[k] || { ws: wsOf[l.batch_id], key: l.customer_key, code: '', name: l.customer_raw, shop: l.outlet_raw || '', value: null, skip: false, qty: 0 };
+    if (!r.code && l.customer_code) r.code = l.customer_code;
+    if (!r.shop && l.outlet_raw) r.shop = l.outlet_raw;
+    r.qty += +l.qty || 0;
+  });
+  C = Object.values(byC);
+  const byP = {};
+  pm.forEach(m => byP[m.wholesaler + '|' + m.product_key] = { ws: m.wholesaler, key: m.product_key, code: '', name: m.raw_name || m.product_key, value: m.sku_code, skip: m.skip, factor: m.factor, qty: 0 });
+  ls.forEach(l => {
+    const k = wsOf[l.batch_id] + '|' + l.product_key;
+    const r = byP[k] = byP[k] || { ws: wsOf[l.batch_id], key: l.product_key, code: '', name: l.product_raw, value: null, skip: false, factor: 1, qty: 0 };
+    if (!r.code && l.product_code) r.code = l.product_code;
+    r.qty += +l.qty || 0;
+  });
+  P = Object.values(byP);
+}
+
+/* one button per wholesaler = its own table */
+function drawWsBar() {
+  const list = tab === 'outlets' ? C : P, n = {};
+  list.forEach(r => n[r.ws] = (n[r.ws] || 0) + 1);
+  const names = Object.keys(n).sort();
+  if (wsPick && !n[wsPick]) wsPick = '';
+  document.getElementById('wsbar').innerHTML = `<button type="button" data-ws=""${!wsPick ? ' class="on"' : ''}>All wholesalers<small>${fmt0(list.length)}</small></button>` +
+    names.map(w => `<button type="button" data-ws="${esc(w)}"${w === wsPick ? ' class="on"' : ''}>${esc(w)}<small>${fmt0(n[w])}</small></button>`).join('');
+  document.querySelectorAll('#wsbar button').forEach(b => b.onclick = () => { wsPick = b.dataset.ws; drawWsBar(); draw(); });
 }
 
 function setTab(t) {
   tab = t; history.replaceState(null, '', '#' + t);
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
-  draw();
+  drawWsBar(); draw();
 }
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => setTab(b.dataset.tab));
 
 const stateOf = r => r.skip ? 'skip' : r.value ? 'linked' : 'none';
+const RANK = { none: 0, linked: 1, skip: 2 };
 function draw() {
-  const list = tab === 'outlets' ? C : P, byCode = tab === 'outlets' ? M.OUT : M.SKU;
-  const ws = document.getElementById('ws').value, st = document.getElementById('st').value, q = normKey(document.getElementById('q').value);
-  const mine = list.filter(r => !ws || r.ws === ws);
+  const isC = tab === 'outlets', list = isC ? C : P, byCode = isC ? M.OUT : M.SKU;
+  const st = document.getElementById('st').value, q = normKey(document.getElementById('q').value);
+  const mine = list.filter(r => !wsPick || r.ws === wsPick);
   const rows = mine.filter(r => (!st || stateOf(r) === st) &&
-    (!q || normKey([r.name, r.value, r.value && byCode[r.value] ? byCode[r.value].outlet_name || byCode[r.value].product : ''].join(' ')).includes(q)))
-    .sort((a, b) => ({ none: 0, linked: 1, skip: 2 }[stateOf(a)] - { none: 0, linked: 1, skip: 2 }[stateOf(b)]) || b.qty - a.qty);
+    (!q || normKey([r.code, r.name, r.shop, r.value, r.value && byCode[r.value] ? byCode[r.value].outlet_name || byCode[r.value].product : ''].join(' ')).includes(q)))
+    .sort((a, b) => RANK[stateOf(a)] - RANK[stateOf(b)] || b.qty - a.qty);
   document.getElementById('kpis').innerHTML =
-    `<div class="kpi"><small>${tab === 'outlets' ? 'Customer names' : 'Product names'}</small><b>${fmt0(mine.length)}</b></div>` +
+    `<div class="kpi"><small>${isC ? 'Customers' : 'Products'}${wsPick ? ' of ' + esc(wsPick) : ''}</small><b>${fmt0(mine.length)}</b></div>` +
     `<div class="kpi"><small>Linked</small><b>${fmt0(mine.filter(r => stateOf(r) === 'linked').length)}</b></div>` +
     `<div class="kpi"><small>Not linked yet</small><b>${fmt0(mine.filter(r => stateOf(r) === 'none').length)}</b></div>` +
     `<div class="kpi"><small>Skipped</small><b>${fmt0(mine.filter(r => stateOf(r) === 'skip').length)}</b></div>`;
   const shown = rows.slice(0, 500);
-  const head = tab === 'outlets'
-    ? '<tr><th>Wholesaler</th><th>Name in the WS report</th><th class="n">Bottles</th><th>Outlet Code</th><th>Outlet Name (Data U)</th><th>Current BDE</th><th>Change to</th><th></th></tr>'
-    : '<tr><th>Wholesaler</th><th>Name in the WS report</th><th class="n">Bottles</th><th>SKU Code</th><th>Product (form)</th><th>Size</th><th>Change to</th><th>Btl / unit</th><th></th></tr>';
+  const head = isC
+    ? `<tr>${wsPick ? '' : '<th>WS</th>'}<th>WS Customer Code</th><th>Customer Name (WS)</th><th>Shop (WS)</th><th class="n">Bottles</th><th>Outlet Code</th><th>Outlet Name (Data U)</th><th>Current BDE</th><th>Change to</th><th></th></tr>`
+    : `<tr>${wsPick ? '' : '<th>WS</th>'}<th>WS Product Code</th><th>Product Name (WS)</th><th class="n">Bottles</th><th>SKU Code</th><th>Product (form)</th><th>Size</th><th>Change to</th><th>Btl / unit</th><th></th></tr>`;
   document.getElementById('tbl').innerHTML = head + (shown.length ? shown.map((r, i) => {
     const x = r.value ? byCode[r.value] : null, s = stateOf(r);
-    const pill = s === 'linked' ? '' : s === 'skip' ? '<span class="pill">Skipped</span>' : '<span class="pill err">Not linked</span>';
-    return `<tr class="${r.skip ? 'skip' : ''}"><td>${esc(r.ws)}</td><td>${esc(r.name)}</td><td class="n">${fmt0(r.qty)}</td>
-      <td class="muted">${esc(r.value || '')} ${pill}</td>
-      <td>${esc(x ? (tab === 'outlets' ? x.outlet_name : x.product) : '')}</td>
-      <td>${esc(x ? (tab === 'outlets' ? x.current_bde || x.bde || '' : x.size || '') : '')}</td>
-      <td class="pick"><input type="text" list="${tab === 'outlets' ? 'dlOutlets' : 'dlSkus'}" data-i="${i}" placeholder="Type code or name"${r.skip ? ' disabled' : ''}></td>
-      ${tab === 'products' ? `<td><input type="number" class="factor" min="0" step="any" data-i="${i}" value="${r.factor || 1}"></td>` : ''}
-      <td style="white-space:nowrap"><button class="btn small gray" data-skip="${i}">${r.skip ? 'Undo skip' : 'Skip'}</button></td></tr>`;
-  }).join('') : '<tr><td colspan="9" class="muted">Nothing here.</td></tr>');
+    const pill = s === 'skip' ? '<span class="pill">Skipped</span>' : s === 'none' ? '<span class="pill err">Not linked</span>' : esc(r.value);
+    return `<tr class="${r.skip ? 'skip' : ''}">${wsPick ? '' : `<td>${esc(r.ws)}</td>`}<td class="muted nowrap">${esc(r.code)}</td><td>${esc(r.name)}</td>` +
+      (isC ? `<td>${esc(r.shop)}</td>` : '') +
+      `<td class="n">${fmt0(r.qty)}</td><td class="nowrap">${pill}</td>
+      <td>${esc(x ? (isC ? x.outlet_name : x.product) : '')}</td>
+      <td>${esc(x ? (isC ? x.current_bde || x.bde || '' : x.size || '') : '')}</td>
+      <td class="pick"><input type="text" list="${isC ? 'dlOutlets' : 'dlSkus'}" data-i="${i}" placeholder="Code or name"${r.skip ? ' disabled' : ''}></td>
+      ${isC ? '' : `<td><input type="number" class="factor" min="0" step="any" data-i="${i}" value="${r.factor || 1}"></td>`}
+      <td><button class="btn small gray" data-skip="${i}">${r.skip ? 'Undo' : 'Skip'}</button></td></tr>`;
+  }).join('') : '<tr><td colspan="11" class="muted">Nothing here.</td></tr>');
   document.getElementById('foot').textContent = rows.length > shown.length ? `Showing 500 of ${fmt0(rows.length)} — search to find others.` : '';
   const tbl = document.getElementById('tbl');
   tbl.querySelectorAll('input[type=text]').forEach(inp => inp.onchange = () => {
@@ -131,11 +156,12 @@ document.getElementById('save').onclick = async () => {
   const btn = document.getElementById('save'); btn.disabled = true;
   try {
     const now = new Date().toISOString();
-    const cRows = C.filter(r => r.dirty).map(r => ({ wholesaler: r.ws, customer_key: r.key, raw_name: r.name, outlet_code: r.skip ? null : r.value, skip: !!r.skip, updated_at: now }));
+    const cRows = C.filter(r => r.dirty).map(r => ({ wholesaler: r.ws, customer_key: r.key, raw_name: r.name + (r.shop ? ' | ' + r.shop : ''), outlet_code: r.skip ? null : r.value, skip: !!r.skip,
+      customer_code: r.code || null, customer_name: r.name || null, ws_outlet_name: r.shop || null, updated_at: now }));
     const pRows = P.filter(r => r.dirty).map(r => ({ wholesaler: r.ws, product_key: r.key, raw_name: r.name, sku_code: r.skip ? null : r.value, skip: !!r.skip, factor: r.factor || 1, updated_at: now }));
-    if (cRows.length) await writeChunks('customer_map', cRows, { onConflict: 'wholesaler,customer_key' });
-    if (pRows.length) await writeChunks('product_map', pRows, { onConflict: 'wholesaler,product_key' });
-    [...C, ...P].forEach(r => { if (r.dirty) { r.dirty = false; r.saved = true; } });
+    if (cRows.length) await saveMapRows('customer', cRows);
+    if (pRows.length) await saveMapRows('product', pRows);
+    [...C, ...P].forEach(r => r.dirty = false);
     toast(cRows.length + pRows.length ? `Saved ${cRows.length + pRows.length}` : 'Nothing changed', 'ok');
     draw();
   } catch (err) { toast('Not saved: ' + err.message, 'err'); }

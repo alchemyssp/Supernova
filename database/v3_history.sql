@@ -1,8 +1,26 @@
 -- ============================================================
--- Supernova v3 — keep off-take already filled before the website (e.g. Jan–Jul 2026)
--- Adds one table and widens the form_lines view. Nothing existing is deleted.
+-- Supernova v3
+--  * WS customer details kept in the WS database (customer code + shop name as the WS writes them)
+--  * offtake_history: off-take already filled before the website (e.g. Jan–Jul 2026)
+-- Adds columns / one table and widens the form_lines view. Nothing existing is deleted.
 -- Run once in the Supabase SQL Editor (after schema.sql).
 -- ============================================================
+
+alter table public.customer_map add column if not exists customer_code text;    -- the WS's own customer code (J0101, AR-0-001, A/0626 ...)
+alter table public.customer_map add column if not exists ws_outlet_name text;   -- shop / outlet name in the WS report, when it has one
+alter table public.customer_map add column if not exists customer_name text;    -- customer (company) name in the WS report
+
+-- fill them for names already saved, from the uploaded lines
+update public.customer_map cm set
+  customer_code = coalesce(cm.customer_code, x.customer_code),
+  ws_outlet_name = coalesce(cm.ws_outlet_name, x.outlet_raw),
+  customer_name = coalesce(cm.customer_name, x.customer_raw)
+from (
+  select distinct on (b.wholesaler, l.customer_key) b.wholesaler, l.customer_key, l.customer_code, l.outlet_raw, l.customer_raw
+  from public.ws_lines l join public.import_batches b on b.id = l.batch_id
+  order by b.wholesaler, l.customer_key, b.month desc
+) x
+where x.wholesaler = cm.wholesaler and x.customer_key = cm.customer_key;
 
 create table if not exists public.offtake_history (
   id            bigint generated always as identity primary key,

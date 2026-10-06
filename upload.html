@@ -7,23 +7,21 @@
 <link rel="icon" href="img/supernovas-64.png">
 <link rel="apple-touch-icon" href="img/supernovas-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&family=Noto+Sans+Thai:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/app.css?v=6">
+<link rel="stylesheet" href="css/app.css?v=7">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="js/config.js?v=1"></script>
-<script src="js/common.js?v=6"></script>
+<script src="js/common.js?v=7"></script>
 <script src="js/parsers.js?v=2"></script>
 <script src="js/match.js?v=3"></script>
 <script src="templates/form_skus.js?v=1"></script>
 <style>
-  td.pick { min-width: 300px; }
   .peek td { font-size: 12px; white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
   .peek tr.head td { background: var(--glass-3); font-weight: 500; }
   .colmap { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
   details summary { cursor: pointer; color: var(--muted); margin-top: 10px; }
   .card-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
   .card-head h2 { margin: 0; flex: 1 1 auto; }
-  .factor { width: 70px; }
 </style>
 </head>
 <body>
@@ -245,7 +243,7 @@ async function matchBatch(b, autoSave) {
   cm.forEach(m => savedC[m.customer_key] = m); pm.forEach(m => savedP[m.product_key] = m);
   oc.forEach(m => otherC[m.customer_key] = m.outlet_code); op.forEach(m => otherP[m.product_key] = m.sku_code);
   M.wsRegion = (WS.find(w => w.name === b.wholesaler) || {}).region || '';
-  groups.customer = buildGroups(ls, 'customer_key', l => ({ kind: 'customer', name: l.customer_raw, outlet: l.outlet_raw, sub: [l.customer_code, l.outlet_raw].filter(Boolean).join(' · ') }));
+  groups.customer = buildGroups(ls, 'customer_key', l => ({ kind: 'customer', name: l.customer_raw, outlet: l.outlet_raw, code: l.customer_code, sub: [l.customer_code, l.outlet_raw].filter(Boolean).join(' · ') }));
   groups.product = buildGroups(ls, 'product_key', l => ({ kind: 'product', name: l.product_raw, sub: l.product_code || '' }));
   groups.customer.forEach(g => resolve('customer', g, savedC, otherC));
   groups.product.forEach(g => resolve('product', g, savedP, otherP));
@@ -303,9 +301,10 @@ async function saveMaps(kind, which, keepStatus) {
   const ws = batch.wholesaler, now = new Date().toISOString();
   const pick = groups[kind].filter(g => which(g) && (g.value || g.skip));
   const rows = kind === 'customer'
-    ? pick.map(g => ({ wholesaler: ws, customer_key: g.key, raw_name: g.name + (g.outlet ? ' | ' + g.outlet : ''), outlet_code: g.skip ? null : g.value, skip: !!g.skip, updated_at: now }))
+    ? pick.map(g => ({ wholesaler: ws, customer_key: g.key, raw_name: g.name + (g.outlet ? ' | ' + g.outlet : ''), outlet_code: g.skip ? null : g.value, skip: !!g.skip,
+        customer_code: g.code || null, customer_name: g.name || null, ws_outlet_name: g.outlet || null, updated_at: now }))
     : pick.map(g => ({ wholesaler: ws, product_key: g.key, raw_name: g.name, sku_code: g.skip ? null : g.value, skip: !!g.skip, factor: g.factor || 1, updated_at: now }));
-  if (rows.length) await writeChunks(kind === 'customer' ? 'customer_map' : 'product_map', rows, { onConflict: kind === 'customer' ? 'wholesaler,customer_key' : 'wholesaler,product_key' });
+  if (rows.length) await saveMapRows(kind, rows);
   pick.forEach(g => { g.dirty = false; if (!keepStatus) g.status = 'saved'; });
   return rows.length;
 }

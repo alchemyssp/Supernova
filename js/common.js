@@ -77,6 +77,18 @@ async function writeChunks(table, rows, opts, onProgress, size = 500) {
   }
 }
 
+/* customer_map / product_map rows; the WS customer details (database/v3_history.sql) are left out
+   when that SQL has not been run yet, so saving never stops because of them */
+async function saveMapRows(kind, rows) {
+  const table = kind === 'customer' ? 'customer_map' : 'product_map';
+  const opts = { onConflict: kind === 'customer' ? 'wholesaler,customer_key' : 'wholesaler,product_key' };
+  try { await writeChunks(table, rows, opts); }
+  catch (e) {
+    if (kind !== 'customer' || !/customer_code|customer_name|ws_outlet_name/.test(e.message || '')) throw e;
+    await writeChunks(table, rows.map(({ customer_code, customer_name, ws_outlet_name, ...r }) => r), opts);
+  }
+}
+
 /* ── similarity for match suggestions (word overlap + same bottle size) ── */
 const SIZE_RE = /(\d+(?:\.\d+)?)\s*(ml|cl|ltr|lt|litre|liter|l)\b\.?/;
 function words(s) {

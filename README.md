@@ -1,28 +1,25 @@
-# Supernova — WS reports -> Off-Take & Outlet Rebate Calculation forms
+# Supernova — WS reports -> Off-take (sheet 01 layout of the Off-Take & Outlet Rebate Calculation form)
 
 Static site (HTML + vanilla JS, no build) on Vercel, data in Supabase project **Supernova**.
+index.html = passcode login, app.html = the whole site on one page:
 
-## Pages
-1. **Import WS report** (import.html)
-   - Step 1: wholesaler + month + file. The layout is read (table / grouped / BOOZIA report, js/parsers.js) and
-     saved per WS. Uploading the same WS + month again replaces it.
-   - Step 2: each WS customer -> Data U outlet, each WS product -> form SKU (js/match.js). Remembered answers
-     are used again; otherwise the closest name is picked ("Auto — check") or left "Not found". Save keeps them.
-2. **Off-take forms** (forms.html) — outlets with bottles per month; "Download form" fills
-   templates/offtake_form.xlsx for that outlet and year (js/form-fill.js):
-   INDEX C3/C5/C7/C9 (outlet, legal name, BDE, area), C15/C17 (1 Jan – 31 Dec), and on sheets 01–12 per SKU row
-   J Wholesaler, K Price Inc. VAT or L Price Ex. VAT (per WS setting), N Vol. (Btls.). Formulas are untouched;
-   Excel recalculates on open. Several WS for one SKU in a month: bottles added, the biggest WS named, price
-   weighted. No WS price: the direct price of the MAPPING sheet goes in L.
-3. **Settings** (settings.html) — upload Data U ("New Data Universe_<date>.xlsm", sheets Outlet + Filter,
-   js/datau.js); per wholesaler: price Inc./Ex. VAT, saved layout, shown on Import.
+1. **Data U** — upload "New Data Universe_<date>.xlsm" (sheets Outlet + Filter, js/datau.js) -> public.outlets.
+2. **Upload WS report** — wholesaler (guessed from the file name) + "Price in the report" Inc./Ex. VAT (saved per WS).
+   The layout is read (table / grouped / BOOZIA report, js/parsers.js) and saved per WS; same WS + month again
+   replaces it. Each customer -> Data U outlet and product -> form SKU (js/match.js): remembered answers first,
+   good name matches are kept straight away, only the ones not found are listed to pick or skip.
+   "The columns look wrong?" opens the column / month settings.
+3. **Off-take** — month + sales (BDE, from Data U Current BDE) -> one Excel, one sheet per outlet, each a copy of
+   sheet "01" of the form (js/sheet-export.js): C2 outlet, C3 legal name, C5 BDE, F2 area, C9 outlet code,
+   C10 month; per SKU row J Wholesaler, K or L price, N Vol. (Btls.) (js/form-fill.js formRows).
+   Formulas reading other sheets of the form become values; the sheet's own totals stay and recalculate on open.
 
 ## Template
-templates/offtake_form.xlsx = "Off-Take & Outlet Rebate Calculation - ALC_BBC - 22 SEP 26.xlsx" with one fix:
-WHOLESALE!L2836 read '08' (August twice, September never) -> '09'.
-templates/form_skus.json = the SKU rows of the month sheets (row 13–500, code, product, size, direct price);
-rows after 394 are not added up by the form's own formulas (calc = false).
-If the form changes, copy the new file in and rebuild form_skus.json from sheet 01 column B + MAPPING.
+templates/offtake_form.xlsx = "Off-Take & Outlet Rebate Calculation - ALC_BBC - 22 SEP 26.xlsx"
+(fix: WHOLESALE!L2836 '08' -> '09'). Only its sheet "01", styles, theme and shared strings are used; the style
+links to xl/featurePropertyBag are removed when building (Excel refuses the file otherwise).
+templates/form_skus.js = SKU rows 13–500 of the month sheets (code, product, size, direct price); rows after 394
+are not added up by the form's formulas (calc = false).
 
 ## Setup
 - database/schema.sql — tables, view form_lines, RPC form_outlets, RLS (signed-in only), wholesaler list

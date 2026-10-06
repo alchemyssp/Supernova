@@ -1,35 +1,12 @@
 // ============================================================
-// Shared helpers: sign-in guard, side menu, formatting, small UI bits
+// Shared helpers: sign-in guard, formatting, small UI bits
 // ============================================================
-
-const NAV = [
-  ['import.html',   'Import WS report'],
-  ['forms.html',    'Off-take forms'],
-  ['settings.html', 'Settings']
-];
 
 /* every page except the login: no session -> back to the login */
 async function requireLogin() {
   const { data } = await sb.auth.getSession();
   if (!data.session) { location.replace('index.html'); return null; }
   return data.session;
-}
-
-function renderNav() {
-  const here = location.pathname.replace(/^.*\//, '') || 'index.html';
-  const side = document.createElement('aside');
-  side.className = 'side';
-  side.innerHTML =
-    '<div class="brand"><img src="img/supernovas-wordmark.png" alt="Supernova\'s"><small>Off-take</small></div>' +
-    '<nav>' + NAV.map(([href, label]) =>
-      `<a href="${href}"${href === here ? ' class="on"' : ''}>${label}</a>`).join('') + '</nav>' +
-    '<button class="link signout" type="button">Sign out</button>';
-  side.querySelector('.signout').onclick = async () => { await sb.auth.signOut(); location.replace('index.html'); };
-  document.body.prepend(side);
-  const menu = document.createElement('button');
-  menu.className = 'menu-btn'; menu.type = 'button'; menu.textContent = 'Menu';
-  menu.onclick = () => document.body.classList.toggle('nav-open');
-  document.body.prepend(menu);
 }
 
 /* ── formatting ── */

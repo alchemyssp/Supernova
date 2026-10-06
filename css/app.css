@@ -10,31 +10,15 @@ html, body { margin: 0; }
 body {
   font: 15px/1.6 'Roboto', 'Noto Sans Thai', system-ui, sans-serif;
   background: var(--bg); color: var(--text);
-  padding-left: 240px;
 }
-body.login { padding-left: 0; }
 h1 { font-size: 28px; line-height: 1.25; margin: 0 0 6px; font-weight: 600; }
 h2 { font-size: 19px; margin: 0 0 12px; font-weight: 600; }
 p.sub { color: var(--muted); margin: 0 0 22px; }
-main { padding: 28px 32px 60px; max-width: 1500px; }
+main { padding: 20px 32px 60px; max-width: 1200px; margin: 0 auto; }
 
-/* side menu */
-.side {
-  position: fixed; inset: 0 auto 0 0; width: 240px; z-index: 30;
-  background: linear-gradient(180deg, var(--sb1), var(--sb2)); color: #fff;
-  display: flex; flex-direction: column; padding: 22px 14px;
-}
-/* the Supernova's wordmark sits on its own off-white paper colour */
-.side .brand { padding: 0 4px 22px; text-align: center; }
-.side .brand img { display: block; width: 100%; border-radius: 14px; background: #F9F8F4; padding: 8px 12px; }
-.side .brand small { display: block; margin-top: 8px; opacity: .85; }
-.side nav { display: flex; flex-direction: column; gap: 4px; }
-.side nav a { color: #fff; text-decoration: none; padding: 10px 14px; border-radius: 12px; opacity: .88; }
-.side nav a:hover { background: rgba(255, 255, 255, .12); opacity: 1; }
-.side nav a.on { background: #fff; color: var(--c1); opacity: 1; font-weight: 600; }
-.side .signout { margin-top: auto; color: #fff; opacity: .85; }
-.menu-btn { display: none; }
-
+/* top bar with the Supernova's wordmark (one-page site) */
+header.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; max-width: 1200px; margin: 0 auto; padding: 18px 32px 0; }
+header.top img { height: 56px; border-radius: 12px; background: #F9F8F4; padding: 6px 14px; }
 /* cards */
 .card { background: var(--card); border-radius: 20px; box-shadow: var(--shadow); padding: 20px 22px; margin-bottom: 18px; }
 .grid { display: grid; gap: 16px; }
@@ -99,10 +83,8 @@ td input, td select { padding: 6px 10px; font-size: 13.5px; }
 .login-box .card { text-align: left; margin-top: 18px; }
 
 @media (max-width: 900px) {
-  body { padding-left: 0; }
-  main { padding: 64px 16px 40px; }
-  .side { transform: translateX(-100%); transition: transform .2s; }
-  body.nav-open .side { transform: none; box-shadow: var(--shadow); }
-  .menu-btn { display: block; position: fixed; top: 12px; left: 16px; z-index: 40; border: 0; border-radius: 12px; padding: 8px 16px; background: var(--c1); color: #fff; }
+  main { padding: 16px 16px 40px; }
+  header.top { padding: 14px 16px 0; }
+  header.top img { height: 44px; }
   h1 { font-size: 23px; }
 }

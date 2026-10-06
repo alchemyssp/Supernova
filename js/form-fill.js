@@ -40,6 +40,19 @@ function formRows(lines, skuByCode) {
   });
 }
 
+/* changes saved in the Off-take preview (public.form_overrides) win over the WS data, row by row */
+function applyOverrides(rows, overrides) {
+  const by = {};
+  rows.forEach(r => by[r.month + '|' + r.code] = Object.assign({}, r));
+  (overrides || []).forEach(o => {
+    const m = +String(o.month).slice(5, 7), k = m + '|' + o.sku_code;
+    if (o.removed) { delete by[k]; return; }
+    by[k] = Object.assign(by[k] || { month: m, code: o.sku_code, note: '' },
+      { ws: o.wholesaler || (by[k] && by[k].ws) || '', col: o.price_col || 'L', price: o.price == null ? null : +o.price, btls: +o.btls || 0, edited: true });
+  });
+  return Object.values(by).filter(r => r.btls);
+}
+
 /* ── small XML helpers ── */
 function colNum(ref) { let n = 0; for (const ch of ref.replace(/\d+/g, '')) n = n * 26 + ch.charCodeAt(0) - 64; return n; }
 function getRow(doc, sheetData, r) {

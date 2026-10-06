@@ -7,13 +7,13 @@
 <link rel="icon" href="img/supernovas-64.png">
 <link rel="apple-touch-icon" href="img/supernovas-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&family=Noto+Sans+Thai:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/app.css?v=7">
+<link rel="stylesheet" href="css/app.css?v=8">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="js/config.js?v=1"></script>
 <script src="js/common.js?v=7"></script>
 <script src="js/match.js?v=3"></script>
-<script src="js/form-fill.js?v=4"></script>
+<script src="js/form-fill.js?v=5"></script>
 <script src="js/outlet-form.js?v=1"></script>
 <script src="templates/form_skus.js?v=1"></script>
 <style> td.c, th.c { text-align: center; width: 36px; } </style>
@@ -21,7 +21,7 @@
 <body>
 <main>
   <h1>Off-take</h1>
-  <p class="sub">One file per outlet: the "Off-Take &amp; Outlet Rebate Calculation" form with all 12 months filled, the claim form (CASH REBATE) and MAPPING to put the % rebate. Several outlets come as one .zip.</p>
+  <p class="sub">One file per outlet: the "Off-Take &amp; Outlet Rebate Calculation" form with all 12 months, the claim form (CASH REBATE) and MAPPING for the % rebate. Preview an outlet to check or change it before exporting.</p>
 
   <div class="card">
     <div class="row">
@@ -38,8 +38,31 @@
     <div class="tbl-wrap"><table id="tbl"></table></div>
   </div>
 </main>
+
+<!-- preview + edit one outlet -->
+<div class="modal" id="pv" hidden>
+  <div class="sheet">
+    <div class="sheet-head">
+      <div class="who"><h2 id="pvName"></h2><span class="muted" id="pvWho"></span></div>
+      <button class="btn light" id="pvReset" type="button">Use WS data for this month</button>
+      <button class="btn light" id="pvSave" type="button">Save changes</button>
+      <button class="btn" id="pvExport" type="button">Export this outlet</button>
+      <button class="btn gray" id="pvClose" type="button">Close</button>
+    </div>
+    <div class="mtabs" id="pvTabs"></div>
+    <div class="grid kpis" id="pvKpis" style="margin-bottom:14px"></div>
+    <div class="tbl-wrap" style="max-height:58vh"><table id="pvTbl"></table></div>
+    <div class="line" style="margin-top:12px">
+      <input type="text" id="pvAdd" list="dlSkus" placeholder="Add a SKU to this month — type code or name" style="flex:1 1 320px">
+      <button class="btn light" id="pvAddBtn" type="button">+ Add</button>
+      <span class="muted" id="pvNote"></span>
+    </div>
+  </div>
+</div>
+<datalist id="dlSkus"></datalist>
+
 <script>
-let rows = [], picked = new Set();
+let rows = [], picked = new Set(), WSN = [], OVR = {}, ovrReady = true;
 const SKU = {}; (window.FORM_SKUS || []).forEach(s => SKU[s.code] = s);
 
 (async () => {
@@ -47,7 +70,9 @@ const SKU = {}; (window.FORM_SKUS || []).forEach(s => SKU[s.code] = s);
   pageHeader('Off-take');
   const y = new Date().getFullYear();
   document.getElementById('year').innerHTML = [y, y - 1, y - 2].map(v => `<option>${v}</option>`).join('');
-  await loadMatchLists();
+  const [, ws] = await Promise.all([loadMatchLists(), sb.from('wholesalers').select('name').order('name')]);
+  WSN = (ws.data || []).map(w => w.name);
+  document.getElementById('dlSkus').innerHTML = M.skus.map(s => `<option value="${esc(s._label)}">`).join('');
   document.getElementById('year').onchange = load;
   document.getElementById('bde').onchange = () => { picked.clear(); draw(); };
   document.getElementById('q').oninput = draw;
@@ -55,14 +80,22 @@ const SKU = {}; (window.FORM_SKUS || []).forEach(s => SKU[s.code] = s);
 })();
 
 const bdeOf = o => o.current_bde || o.bde || '';
+const year = () => +document.getElementById('year').value;
+
 async function load() {
-  const { data, error } = await sb.rpc('form_outlets', { p_year: +document.getElementById('year').value });
+  const [{ data, error }, ov] = await Promise.all([
+    sb.rpc('form_outlets', { p_year: year() }),
+    sb.from('form_overrides').select('*').gte('month', year() + '-01-01').lte('month', year() + '-12-01')
+  ]);
   if (error) return toast(error.message, 'err');
+  ovrReady = !ov.error; OVR = {};
+  (ov.data || []).forEach(o => (OVR[o.outlet_code] = OVR[o.outlet_code] || []).push(o));
   const by = {};
   data.forEach(r => {
     const x = by[r.outlet_code] = by[r.outlet_code] || { code: r.outlet_code, months: {}, btls: 0 };
     x.months[+r.month.slice(5, 7)] = +r.btls; x.btls += +r.btls;
   });
+  Object.keys(OVR).forEach(c => { if (!by[c]) by[c] = { code: c, months: {}, btls: 0 }; });   // outlets only added by hand
   rows = Object.values(by).map(r => Object.assign(r, { o: M.OUT[r.code] || { code: r.code } }))
     .sort((a, b) => String(a.o.outlet_name || a.code).localeCompare(String(b.o.outlet_name || b.code)));
   const bdes = [...new Set(rows.map(r => bdeOf(r.o)).filter(Boolean))].sort();
@@ -82,49 +115,179 @@ function draw() {
   const allOn = list.length && list.every(r => picked.has(r.code));
   document.getElementById('tbl').innerHTML =
     `<tr><th class="c"><input type="checkbox" id="all"${allOn ? ' checked' : ''}></th><th>Outlet</th><th>Code</th><th>BDE</th><th>Area</th>` +
-    MONTHS.map(m => `<th class="n">${m}</th>`).join('') + '<th class="n">Total</th></tr>' +
+    MONTHS.map(m => `<th class="n">${m}</th>`).join('') + '<th class="n">Total</th><th></th></tr>' +
     (list.length ? list.map(r => `<tr><td class="c"><input type="checkbox" data-code="${esc(r.code)}"${picked.has(r.code) ? ' checked' : ''}></td>
-      <td>${esc(r.o.outlet_name || '(not in Data U)')}</td><td class="muted nowrap">${esc(r.code)}</td><td>${esc(bdeOf(r.o))}</td><td>${esc(r.o.area || '')}</td>` +
-      MONTHS.map((_, i) => `<td class="n">${fmt0(r.months[i + 1])}</td>`).join('') + `<td class="n"><b>${fmt0(r.btls)}</b></td></tr>`).join('')
-      : '<tr><td colspan="18" class="muted">No outlet has off-take for this choice yet.</td></tr>');
+      <td>${esc(r.o.outlet_name || '(not in Data U)')}${OVR[r.code] ? ' <span class="pill warn">edited</span>' : ''}</td><td class="muted nowrap">${esc(r.code)}</td><td>${esc(bdeOf(r.o))}</td><td>${esc(r.o.area || '')}</td>` +
+      MONTHS.map((_, i) => `<td class="n">${fmt0(r.months[i + 1])}</td>`).join('') + `<td class="n"><b>${fmt0(r.btls)}</b></td>
+      <td><button class="btn small light" data-pv="${esc(r.code)}">Preview</button></td></tr>`).join('')
+      : '<tr><td colspan="19" class="muted">No outlet has off-take for this choice yet.</td></tr>');
   document.getElementById('all').onchange = e => { list.forEach(r => e.target.checked ? picked.add(r.code) : picked.delete(r.code)); draw(); };
   document.querySelectorAll('#tbl input[data-code]').forEach(c => c.onchange = () => { c.checked ? picked.add(c.dataset.code) : picked.delete(c.dataset.code); info(); });
+  document.querySelectorAll('#tbl [data-pv]').forEach(b => b.onclick = () => openPreview(b.dataset.pv));
   info();
 }
 function info() {
   const n = picked.size, list = visible();
-  document.getElementById('info').textContent = `${fmt0(list.length)} outlets shown · ${fmt0(n)} ticked` + (n ? ` — Export makes ${n === 1 ? '1 Excel file' : n + ' files in one .zip'}` : ' — tick the outlets to export');
+  document.getElementById('info').textContent = `${fmt0(list.length)} outlets shown · ${fmt0(n)} ticked` + (n ? ` — Export makes ${n === 1 ? '1 Excel file' : n + ' files in one .zip'}` : ' — tick the outlets to export, or Preview one');
   document.getElementById('export').disabled = !n;
   document.getElementById('export').textContent = n > 1 ? `Export ${n} outlets` : 'Export';
 }
 
-document.getElementById('export').onclick = async () => {
-  const year = +document.getElementById('year').value, codes = [...picked], bde = document.getElementById('bde').value;
-  const btn = document.getElementById('export'), bar = document.getElementById('bar');
+/* lines of these outlets for the year, as form rows (before the saved changes) */
+async function formRowsFor(codes) {
+  let lines = [];
+  for (let i = 0; i < codes.length; i += 40) {
+    lines = lines.concat(await fetchAll(() => sb.from('form_lines').select('outlet_code, month, wholesaler, price_vat, sku_code, btls, price_per_btl')
+      .in('outlet_code', codes.slice(i, i + 40)).gte('month', year() + '-01-01').lte('month', year() + '-12-01')));
+  }
+  const out = {};
+  codes.forEach(c => out[c] = formRows(lines.filter(l => l.outlet_code === c), SKU));
+  return out;
+}
+
+async function exportOutlets(codes, extra) {
+  const btn = document.getElementById('export'), bar = document.getElementById('bar'), y = year(), bde = document.getElementById('bde').value;
   btn.disabled = true; bar.hidden = false; bar.firstChild.style.width = '2%';
   try {
-    let lines = [];
-    for (let i = 0; i < codes.length; i += 40) {
-      const part = codes.slice(i, i + 40);
-      lines = lines.concat(await fetchAll(() => sb.from('form_lines').select('outlet_code, month, wholesaler, price_vat, sku_code, btls, price_per_btl')
-        .in('outlet_code', part).gte('month', year + '-01-01').lte('month', year + '-12-01')));
-    }
+    const base = await formRowsFor(codes);
     const zip = codes.length > 1 ? new JSZip() : null;
     let below = 0;
     for (let i = 0; i < codes.length; i++) {
       const code = codes[i], o = M.OUT[code] || { code };
       btn.textContent = `Preparing ${i + 1} / ${codes.length}…`;
-      const fr = formRows(lines.filter(l => l.outlet_code === code), SKU);
+      const fr = applyOverrides(base[code], (OVR[code] || []).concat((extra && extra[code]) || []));
       below += fr.filter(r => SKU[r.code] && !SKU[r.code].calc).length;
-      const blob = await buildOutletForm(o, year, fr, M.skus);
-      if (zip) zip.file(formFileName(o, year), blob); else saveBlob(blob, formFileName(o, year));
+      const blob = await buildOutletForm(o, y, fr, M.skus);
+      if (zip) zip.file(formFileName(o, y), blob); else saveBlob(blob, formFileName(o, y));
       bar.firstChild.style.width = (5 + 90 * (i + 1) / codes.length) + '%';
     }
-    if (zip) saveBlob(await zip.generateAsync({ type: 'blob' }), `Off-Take ${year}${bde ? ' - ' + bde.replace(/[\\/:*?"<>|]/g, ' ') : ''} (${codes.length} outlets).zip`);
+    if (zip) saveBlob(await zip.generateAsync({ type: 'blob' }), `Off-Take ${y}${bde ? ' - ' + bde.replace(/[\\/:*?"<>|]/g, ' ') : ''} (${codes.length} outlets).zip`);
     toast(below ? `Done. Note: ${below} SKU line(s) sit below row 394, where the form does not add them up.` : 'Done', below ? '' : 'ok');
   } catch (err) { toast('Could not export: ' + err.message, 'err'); }
   bar.hidden = true; info();
+}
+document.getElementById('export').onclick = () => exportOutlets([...picked]);
+
+/* ── preview + edit ── */
+const PV = { code: null, base: [], pending: {}, month: 1 };
+const pkey = (m, sku) => m + '|' + sku;
+const monthDate = m => `${year()}-${String(m).padStart(2, '0')}-01`;
+const valueEx = r => r.price == null ? 0 : (r.col === 'K' ? r.price / 1.07 : r.price) * (+r.btls || 0);
+
+async function openPreview(code) {
+  PV.code = code; PV.pending = {};
+  const o = M.OUT[code] || { code };
+  document.getElementById('pvName').textContent = o.outlet_name || code;
+  document.getElementById('pvWho').textContent = [code, o.company_name, bdeOf(o) && 'BDE ' + bdeOf(o), o.area, year()].filter(Boolean).join(' · ');
+  document.getElementById('pv').hidden = false; document.body.style.overflow = 'hidden';
+  document.getElementById('pvTbl').innerHTML = '<tr><td class="muted">Loading…</td></tr>';
+  PV.base = (await formRowsFor([code]))[code];
+  const months = merged().map(r => r.month);
+  PV.month = months.length ? Math.max(...months) : new Date().getMonth() + 1;
+  drawPreview();
+}
+/* WS data + saved changes + changes not saved yet */
+function merged() { return applyOverrides(PV.base, (OVR[PV.code] || []).concat(Object.values(PV.pending))); }
+
+function drawPreview() {
+  const all = merged(), m = PV.month;
+  const per = {}; all.forEach(r => per[r.month] = (per[r.month] || 0) + (+r.btls || 0));
+  document.getElementById('pvTabs').innerHTML = MONTHS.map((n, i) =>
+    `<button type="button" data-m="${i + 1}" class="${i + 1 === m ? 'on' : ''}${per[i + 1] ? ' has' : ''}">${n}<small>${per[i + 1] ? fmt0(per[i + 1]) : '–'}</small></button>`).join('');
+  document.querySelectorAll('#pvTabs button').forEach(b => b.onclick = () => { PV.month = +b.dataset.m; drawPreview(); });
+  const list = all.filter(r => r.month === m).sort((a, b) => ((SKU[a.code] || {}).row || 999) - ((SKU[b.code] || {}).row || 999));
+  const btls = list.reduce((a, r) => a + (+r.btls || 0), 0), ex = list.reduce((a, r) => a + valueEx(r), 0);
+  const unsaved = Object.keys(PV.pending).length;
+  document.getElementById('pvKpis').innerHTML =
+    `<div class="kpi"><small>${MONTHS[m - 1]} ${year()} · SKUs</small><b>${fmt0(list.length)}</b></div>` +
+    `<div class="kpi"><small>Vol. (Btls.)</small><b>${fmt0(btls)}</b></div>` +
+    `<div class="kpi"><small>Total Price Ex. VAT</small><b>${fmt0(ex)}</b></div>` +
+    `<div class="kpi"><small>Total Price Inc. VAT</small><b>${fmt0(ex * 1.07)}</b></div>`;
+  const wsOpts = sel => [...new Set([sel, ...WSN].filter(Boolean))].map(w => `<option${w === sel ? ' selected' : ''}>${esc(w)}</option>`).join('');
+  document.getElementById('pvTbl').innerHTML =
+    '<tr><th>Code</th><th>Principle</th><th>Brand</th><th>Product</th><th>Size</th><th>Wholesaler</th><th class="n">Price</th><th>Price is</th><th class="n">Vol. (Btls.)</th><th class="n">Total Ex. VAT</th><th></th></tr>' +
+    (list.length ? list.map(r => {
+      const s = SKU[r.code] || {};
+      return `<tr class="${r.edited ? 'edited' : ''}"><td class="muted nowrap">${esc(r.code)}</td><td>${esc(s.principle || '')}</td><td>${esc(s.brand || '')}</td>
+        <td>${esc(s.product || '')}${s.calc === false ? ' <span class="pill warn">row ' + s.row + '</span>' : ''}${r.note ? '<br><span class="muted">' + esc(r.note) + '</span>' : ''}</td><td>${esc(s.size || '')}</td>
+        <td><select class="mini" data-f="ws" data-c="${esc(r.code)}">${wsOpts(r.ws)}</select></td>
+        <td class="n"><input type="number" class="num" step="any" min="0" data-f="price" data-c="${esc(r.code)}" value="${r.price == null ? '' : r.price}"></td>
+        <td><select class="mini" data-f="col" data-c="${esc(r.code)}"><option value="L"${r.col !== 'K' ? ' selected' : ''}>Ex. VAT</option><option value="K"${r.col === 'K' ? ' selected' : ''}>Inc. VAT</option></select></td>
+        <td class="n"><input type="number" class="num" step="any" min="0" data-f="btls" data-c="${esc(r.code)}" value="${r.btls}"></td>
+        <td class="n">${fmt2(valueEx(r))}</td>
+        <td><button class="btn small gray" data-del="${esc(r.code)}">Remove</button></td></tr>`;
+    }).join('') : `<tr><td colspan="11" class="muted">Nothing in ${MONTHS[m - 1]} — add a SKU below if needed.</td></tr>`);
+  const tbl = document.getElementById('pvTbl');
+  tbl.querySelectorAll('[data-f]').forEach(el => el.onchange = () => change(el.dataset.c, el.dataset.f, el.value));
+  tbl.querySelectorAll('[data-del]').forEach(b => b.onclick = () => change(b.dataset.del, 'removed', true));
+  document.getElementById('pvNote').innerHTML = (unsaved ? `<span class="warn">${unsaved} change(s) not saved yet</span>` : '') +
+    (!ovrReady ? ' <span class="err">Changes can only be kept after database/v4_edits.sql is run — "Export this outlet" still uses them.</span>' : '');
+  document.getElementById('pvSave').disabled = !unsaved || !ovrReady;
+}
+
+/* a change = the full row of that month + SKU (what the form gets) */
+function change(code, field, value) {
+  const m = PV.month, cur = merged().find(r => r.month === m && r.code === code) || { ws: WSN[0] || '', col: 'L', price: null, btls: 1 };
+  const row = { outlet_code: PV.code, month: monthDate(m), sku_code: code, wholesaler: cur.ws, price: cur.price, price_col: cur.col || 'L', btls: +cur.btls || 0, removed: false };
+  if (field === 'ws') row.wholesaler = value;
+  if (field === 'price') row.price = value === '' ? null : +value;
+  if (field === 'col') row.price_col = value;
+  if (field === 'btls') { row.btls = +value || 0; if (!row.btls) row.removed = true; }
+  if (field === 'removed') row.removed = true;
+  PV.pending[pkey(m, code)] = row;
+  drawPreview();
+}
+document.getElementById('pvAddBtn').onclick = () => {
+  const inp = document.getElementById('pvAdd'), code = inp.value.split(' — ')[0].trim();
+  if (!SKU[code]) return toast('Pick a SKU from the list', 'err');
+  if (merged().some(r => r.month === PV.month && r.code === code)) return toast('This SKU is already in ' + MONTHS[PV.month - 1], 'err');
+  PV.pending[pkey(PV.month, code)] = { outlet_code: PV.code, month: monthDate(PV.month), sku_code: code,
+    wholesaler: WSN.includes('Direct sales') ? 'Direct sales' : (WSN[0] || ''), price: SKU[code].direct_price_exc || null, price_col: 'L', btls: 1, removed: false };
+  inp.value = ''; drawPreview();
 };
+
+document.getElementById('pvSave').onclick = async () => {
+  const toSave = Object.values(PV.pending).map(r => Object.assign({}, r, { updated_at: new Date().toISOString() }));
+  try {
+    await writeChunks('form_overrides', toSave, { onConflict: 'outlet_code,month,sku_code' });
+    OVR[PV.code] = (OVR[PV.code] || []).filter(o => !PV.pending[pkey(+String(o.month).slice(5, 7), o.sku_code)]).concat(toSave);
+    PV.pending = {};
+    toast('Saved — the export uses these changes', 'ok');
+    drawPreview(); refreshRow(PV.code);
+  } catch (err) { toast('Not saved: ' + err.message, 'err'); }
+};
+document.getElementById('pvReset').onclick = async () => {
+  const m = PV.month;
+  if (!confirm(`Take back every change of ${MONTHS[m - 1]} ${year()} for this outlet and use the WS data again?`)) return;
+  Object.keys(PV.pending).forEach(k => { if (+k.split('|')[0] === m) delete PV.pending[k]; });
+  if (ovrReady && (OVR[PV.code] || []).some(o => +String(o.month).slice(5, 7) === m)) {
+    const { error } = await sb.from('form_overrides').delete().eq('outlet_code', PV.code).eq('month', monthDate(m));
+    if (error) return toast(error.message, 'err');
+    OVR[PV.code] = OVR[PV.code].filter(o => +String(o.month).slice(5, 7) !== m);
+    if (!OVR[PV.code].length) delete OVR[PV.code];
+  }
+  drawPreview(); refreshRow(PV.code);
+};
+document.getElementById('pvExport').onclick = () => {
+  const extra = {}; extra[PV.code] = Object.values(PV.pending);
+  exportOutlets([PV.code], extra);
+};
+function closePreview() {
+  if (Object.keys(PV.pending).length && !confirm('Close without saving the changes?')) return;
+  PV.pending = {}; document.getElementById('pv').hidden = true; document.body.style.overflow = '';
+}
+document.getElementById('pvClose').onclick = closePreview;
+document.getElementById('pv').onclick = e => { if (e.target.id === 'pv') closePreview(); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !document.getElementById('pv').hidden) closePreview(); });
+
+/* the list row of an outlet after its changes were saved */
+function refreshRow(code) {
+  const r = rows.find(x => x.code === code); if (!r) return;
+  r.months = {};
+  applyOverrides(PV.base, OVR[code] || []).forEach(x => r.months[x.month] = (r.months[x.month] || 0) + (+x.btls || 0));
+  r.btls = Object.values(r.months).reduce((a, b) => a + b, 0);
+  draw();
+}
 </script>
 </body>
 </html>

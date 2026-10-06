@@ -121,6 +121,23 @@ td.pick { min-width: 150px; width: 26%; }
 td .factor { width: 64px; }
 .sug { font-size: .92em; }
 
+/* preview window */
+.modal { position: fixed; inset: 0; z-index: 50; background: rgba(8, 9, 11, .62); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+  display: flex; align-items: flex-start; justify-content: center; padding: 3vh 2vw; overflow: auto; }
+.modal[hidden] { display: none; }
+.modal .sheet { width: min(1500px, 100%); background: linear-gradient(160deg, #34363C, #23252A); border-radius: var(--radius); box-shadow: 0 30px 80px rgba(0, 0, 0, .6); padding: 22px clamp(14px, 2vw, 28px); }
+.modal .sheet-head { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 14px; }
+.modal .sheet-head .who { flex: 1 1 320px; }
+.modal .sheet-head .who h2 { margin: 0 0 2px; }
+.mtabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+.mtabs button { border: 0; background: var(--glass); color: var(--muted); padding: 6px 12px; border-radius: 12px; cursor: pointer; font-size: 13px; text-align: center; min-width: 58px; }
+.mtabs button small { display: block; font-size: 11px; opacity: .75; }
+.mtabs button.on { background: var(--white); color: var(--ink); }
+.mtabs button.has:not(.on) { color: var(--text); background: var(--glass-2); }
+tr.edited td { background: rgba(245, 201, 122, .07); }
+td input.num { width: 92px; text-align: right; }
+td select.mini { width: auto; padding: 6px 8px; }
+
 /* progress */
 .bar { height: 6px; background: rgba(255, 255, 255, .08); border-radius: 99px; overflow: hidden; }
 .bar i { display: block; height: 100%; width: 0; background: var(--white); transition: width .2s; }

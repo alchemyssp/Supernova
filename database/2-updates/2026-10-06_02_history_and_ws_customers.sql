@@ -1,3 +1,4 @@
+-- ALREADY RUN on 2026-10-06 (safe to run again).
 -- ============================================================
 -- Supernova v3
 --  * WS customer details kept in the WS database (customer code + shop name as the WS writes them)

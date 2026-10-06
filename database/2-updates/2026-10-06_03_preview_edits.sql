@@ -1,3 +1,4 @@
+-- ALREADY RUN on 2026-10-06 (safe to run again).
 -- ============================================================
 -- Supernova v4 — changes made in the Off-take preview
 -- One row per outlet + month + SKU. It replaces what came from the WS reports for that row

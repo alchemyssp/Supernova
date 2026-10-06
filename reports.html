@@ -14,8 +14,7 @@
 </head>
 <body>
 <main>
-  <h1>Reports &amp; Wholesalers</h1>
-  <p class="sub">Which WS reports are in for each month, and how each wholesaler's file is read.</p>
+  <h1 style="margin-bottom:22px">Reports</h1>
 
   <div class="card">
     <h2>Bottles by wholesaler and month</h2>
@@ -24,8 +23,8 @@
   </div>
 
   <div class="card">
-    <div class="line"><div style="flex:1 1 300px"><h2 style="margin:0">Forms filled before the website</h2>
-      <span class="muted">Off-take of 2026 already in the "Off-Take &amp; Outlet Rebate Calculation" files of each team.</span></div>
+    <div class="line"><div style="flex:1 1 300px"><h2 style="margin:0">Forms filled before</h2>
+      <span class="muted">Load the 2026 forms of each team</span></div>
       <a class="btn light" href="history.html" style="text-decoration:none">Load Forms</a></div>
   </div>
 
@@ -36,7 +35,7 @@
 
   <div class="card">
     <div class="line" style="margin-bottom:12px"><h2 style="margin:0;flex:1">Wholesalers</h2><button class="btn light" id="addWs" type="button">+ Add wholesaler</button></div>
-    <p class="muted" style="margin:-4px 0 12px">"Price in the report": Inc. VAT goes to column K of the form, Ex. VAT to column L.</p>
+    <p class="muted" style="margin:-4px 0 12px">Inc. VAT → column K · Ex. VAT → column L</p>
     <div class="tbl-wrap"><table id="wTbl"></table></div>
   </div>
 </main>
@@ -44,7 +43,7 @@
 let B = [];
 (async () => {
   if (!await requireLogin()) return;
-  pageHeader('Reports & Wholesalers');
+  pageHeader('Reports');
   const y = new Date().getFullYear();
   document.getElementById('year').innerHTML = [y, y - 1].map(v => `<option>${v}</option>`).join('');
   document.getElementById('year').onchange = drawGrid;

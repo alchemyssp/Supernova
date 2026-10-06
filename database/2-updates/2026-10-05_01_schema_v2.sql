@@ -1,3 +1,5 @@
+-- ALREADY RUN on 2026-10-05. DO NOT RUN AGAIN: it drops the tables (and their data) before creating them.
+-- For a new project use database/1-setup/schema.sql instead.
 -- ============================================================
 -- Supernova v2 — WS report -> Data U outlet -> "Off-Take & Outlet Rebate Calculation" form
 -- Run the whole file in the Supabase SQL Editor. It removes the v1 tables first (they hold no data).

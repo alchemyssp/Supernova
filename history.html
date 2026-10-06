@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Load Forms</title>
+<link rel="icon" href="img/supernovas-64.png">
+<link rel="apple-touch-icon" href="img/supernovas-192.png">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&family=Noto+Sans+Thai:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=8">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="js/config.js?v=1"></script>
+<script src="js/common.js?v=7"></script>
+<script src="js/match.js?v=3"></script>
+<script src="templates/form_skus.js?v=1"></script>
+<style> .card-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; } .card-head h2 { margin: 0; flex: 1 1 auto; } </style>
+</head>
+<body>
+<main>
+  <h1>Load Forms</h1>
+  <p class="sub">Off-take already filled in the "Off-Take &amp; Outlet Rebate Calculation" files before the website (the CSV made from the monthly team folders). Loading again replaces what was loaded before.</p>
+
+  <div class="card">
+    <div class="line">
+      <span class="muted" id="info" style="flex:1 1 260px">Choose the CSV file.</span>
+      <label class="btn file-btn">Choose CSV<input type="file" id="file" accept=".csv,.xlsx"></label>
+    </div>
+  </div>
+
+  <div class="grid kpis" id="kpis"></div>
+
+  <div class="card" id="cardOutlet" hidden>
+    <div class="card-head">
+      <h2>Identify Outlet</h2>
+      <span class="muted" id="cnt"></span>
+      <select id="show" style="width:auto"><option value="check">To check</option><option value="all">All</option></select>
+      <button class="btn" id="load" type="button">Save to database</button>
+    </div>
+    <p class="muted" style="margin:-4px 0 10px">Outlet name in the form (+ BDE) → Data U outlet. Only outlets found or picked are loaded; "Skip" leaves an outlet out.</p>
+    <div class="bar" style="margin-bottom:12px" hidden id="bar"><i></i></div>
+    <div class="tbl-wrap"><table id="tbl"></table></div>
+  </div>
+</main>
+<datalist id="dlOutlets"></datalist>
+
+<script>
+const SRC = 'forms 2026', FORM_WS = 'Off-take form';
+let LINES = [], G = [];
+const PILL = { saved: '<span class="pill ok">Remembered</span>', auto: '<span class="pill warn">Auto — check</span>', none: '<span class="pill err">Not found</span>', edited: '<span class="pill">Changed</span>' };
+
+(async () => {
+  if (!await requireLogin()) return;
+  pageHeader('Load Forms');
+  await loadMatchLists();
+  document.getElementById('dlOutlets').innerHTML = M.outlets.map(o => `<option value="${esc(o._label)}">`).join('');
+  const { count } = await sb.from('offtake_history').select('id', { count: 'exact', head: true }).eq('source', SRC);
+  document.getElementById('info').innerHTML = count ? `<b>${fmt0(count)}</b> lines from the forms are in the database now. Choose the CSV to load again.` : 'Nothing loaded yet — choose the CSV file.';
+})();
+
+document.getElementById('file').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', raw: true });
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '', raw: false });
+  if (!rows.length || !('sku_code' in rows[0])) return toast('This is not the forms CSV (no sku_code column)', 'err');
+  /* the same outlet in two files of one month (e.g. a new contract file): keep the newest file */
+  const newest = {};
+  rows.forEach(r => { const k = r.month + '|' + normKey(r.outlet_name) + '|' + normKey(r.bde); if (!newest[k] || r.modified > newest[k]) newest[k] = r.modified; });
+  LINES = rows.filter(r => r.outlet_name && newest[r.month + '|' + normKey(r.outlet_name) + '|' + normKey(r.bde)] === r.modified);
+  await identify();
+};
+
+async function identify() {
+  const saved = {};
+  (await fetchAll(() => sb.from('customer_map').select('*').eq('wholesaler', FORM_WS))).forEach(m => saved[m.customer_key] = m);
+  const by = {};
+  LINES.forEach(l => {
+    const key = normKey(l.outlet_name) + ' | ' + normKey(l.bde);
+    const g = by[key] = by[key] || { key, kind: 'customer', name: l.outlet_name, outlet: l.legal_name, bde: l.bde, team: l.team, qty: 0, months: new Set() };
+    g.qty += +l.btls || 0; g.months.add(+l.month);
+  });
+  G = Object.values(by).sort((a, b) => b.qty - a.qty);
+  M.wsRegion = '';
+  G.forEach(g => {
+    resolve('customer', g, saved, {});
+    if (g.status === 'saved') return;
+    /* the outlet of the same BDE comes first */
+    const bde = normKey(g.bde);
+    (g.cands || []).forEach(c => { if ([c.x.current_bde, c.x.bde].some(b => normKey(b) === bde)) c.s += 0.1; });
+    (g.cands || []).sort((a, b) => b.s - a.s);
+    const best = g.cands && g.cands[0];
+    if (best && best.s >= AUTO_SCORE.customer) { g.value = best.x.code; g.status = 'auto'; } else { g.value = null; g.status = 'none'; }
+  });
+  const months = [...new Set(LINES.map(l => +l.month))].sort((a, b) => a - b);
+  const notInForm = new Set(LINES.filter(l => !(window.FORM_SKUS || []).some(s => s.code === l.sku_code)).map(l => l.sku_code)).size;
+  document.getElementById('kpis').innerHTML =
+    `<div class="kpi"><small>Lines (${months.map(m => MONTHS[m - 1]).join(', ')})</small><b>${fmt0(LINES.length)}</b></div>` +
+    `<div class="kpi"><small>Bottles</small><b>${fmt0(LINES.reduce((a, l) => a + (+l.btls || 0), 0))}</b></div>` +
+    `<div class="kpi"><small>Outlets in the forms</small><b>${fmt0(G.length)}</b></div>` +
+    `<div class="kpi"><small>SKU codes not in today's form</small><b>${fmt0(notInForm)}</b></div>`;
+  document.getElementById('cardOutlet').hidden = false;
+  draw();
+}
+
+function draw() {
+  const show = document.getElementById('show').value, order = { none: 0, auto: 1, edited: 2, saved: 3 };
+  const rows = G.filter(g => show === 'all' || g.status !== 'saved').sort((a, b) => order[a.status] - order[b.status] || b.qty - a.qty);
+  const ok = G.filter(g => g.value || g.skip).length;
+  document.getElementById('cnt').textContent = `${fmt0(ok)} / ${fmt0(G.length)} found`;
+  const shown = rows.slice(0, 500);
+  document.getElementById('tbl').innerHTML = '<tr><th>Outlet in the form</th><th>BDE</th><th>Team</th><th>Months</th><th class="n">Bottles</th><th>Data U outlet</th><th></th><th></th></tr>' +
+    (shown.length ? shown.map((g, i) => {
+      const label = g.value ? (M.OUT[g.value] ? M.OUT[g.value]._label : g.value) : '';
+      const sug = g.status !== 'saved' && g.cands ? g.cands.filter(c => c.x.code !== g.value).slice(0, 3).map(c => `<button class="sug" type="button" data-i="${i}" data-c="${esc(c.x.code)}">${esc(c.x._label)}${c.x.current_bde ? ' · ' + esc(c.x.current_bde) : ''}</button>`).join('') : '';
+      return `<tr class="${g.skip ? 'skip' : ''}"><td>${esc(g.name)}${g.outlet ? '<br><span class="muted">' + esc(g.outlet) + '</span>' : ''}</td><td>${esc(g.bde || '')}</td><td>${esc(g.team || '')}</td>
+        <td class="nowrap">${[...g.months].sort((a, b) => a - b).map(m => MONTHS[m - 1]).join(' ')}</td><td class="n">${fmt0(g.qty)}</td>
+        <td class="pick"><input type="text" list="dlOutlets" data-i="${i}" value="${esc(label)}" placeholder="Type code or name"${g.skip ? ' disabled' : ''}><div>${sug}</div></td>
+        <td>${PILL[g.status]}</td><td><button class="btn small gray" data-skip="${i}">${g.skip ? 'Undo' : 'Skip'}</button></td></tr>`;
+    }).join('') : '<tr><td colspan="8" class="muted">Nothing to check — press Save to database.</td></tr>');
+  const tbl = document.getElementById('tbl'), edit = g => { g.status = 'edited'; g.dirty = true; };
+  tbl.querySelectorAll('input[type=text]').forEach(inp => inp.onchange = () => {
+    const g = shown[+inp.dataset.i], v = inp.value.trim(), code = v.split(' — ')[0].trim();
+    if (v && !M.OUT[code]) return toast('Not in Data U: ' + v, 'err');
+    g.value = v ? code : null; edit(g);
+  });
+  tbl.querySelectorAll('.sug').forEach(b => b.onclick = () => { const g = shown[+b.dataset.i]; g.value = b.dataset.c; g.skip = false; edit(g); draw(); });
+  tbl.querySelectorAll('[data-skip]').forEach(b => b.onclick = () => { const g = shown[+b.dataset.skip]; g.skip = !g.skip; edit(g); draw(); });
+}
+document.getElementById('show').onchange = draw;
+
+document.getElementById('load').onclick = async () => {
+  const left = G.filter(g => !g.value && !g.skip).length;
+  if (left && !confirm(`${left} outlet(s) are not found yet and will be left out. Save the others now?`)) return;
+  const btn = document.getElementById('load'), bar = document.getElementById('bar');
+  btn.disabled = true; bar.hidden = false; bar.firstChild.style.width = '3%';
+  try {
+    /* remember the matches (WS Database, "Off-take form") */
+    await sb.from('wholesalers').upsert({ name: FORM_WS, active: false }, { onConflict: 'name', ignoreDuplicates: true });
+    const now = new Date().toISOString();
+    await saveMapRows('customer', G.filter(g => g.value || g.skip).map(g => ({ wholesaler: FORM_WS, customer_key: g.key, raw_name: g.name + (g.bde ? ' | ' + g.bde : ''),
+      outlet_code: g.skip ? null : g.value, skip: !!g.skip, customer_code: null, customer_name: g.name, ws_outlet_name: g.outlet || null, updated_at: now })));
+    const codeOf = {}; G.forEach(g => { if (g.value && !g.skip) codeOf[g.key] = g.value; });
+    const out = [];
+    LINES.forEach(l => {
+      const code = codeOf[normKey(l.outlet_name) + ' | ' + normKey(l.bde)];
+      if (!code) return;
+      const inc = toNum(l.price_inc), ex = toNum(l.price_ex);
+      out.push({ outlet_code: code, month: `2026-${String(l.month).padStart(2, '0')}-01`, wholesaler: String(l.wholesaler || '').trim() || null, sku_code: l.sku_code,
+        btls: toNum(l.btls) || 0, price_per_btl: inc > 0 ? inc : ex, price_vat: inc > 0 ? 'inc' : 'exc', source: SRC });
+    });
+    bar.firstChild.style.width = '10%';
+    const { error } = await sb.from('offtake_history').delete().eq('source', SRC);
+    if (error) throw error;
+    await writeChunks('offtake_history', out, null, (n, t) => bar.firstChild.style.width = (10 + 90 * n / t) + '%', 1000);
+    G.forEach(g => { if (g.value || g.skip) { g.status = 'saved'; g.dirty = false; } });
+    toast(`Loaded ${fmt0(out.length)} lines of ${fmt0(Object.keys(codeOf).length)} outlets`, 'ok');
+    document.getElementById('info').innerHTML = `<b>${fmt0(out.length)}</b> lines from the forms are in the database now.`;
+    draw();
+  } catch (err) { toast('Not saved: ' + err.message, 'err'); }
+  btn.disabled = false; bar.hidden = true;
+};
+</script>
+</body>
+</html>

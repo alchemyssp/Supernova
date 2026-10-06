@@ -11,8 +11,9 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="js/config.js?v=1"></script>
-<script src="js/common.js?v=3"></script>
-<script src="js/form-fill.js?v=1"></script>
+<script src="js/common.js?v=4"></script>
+<script src="js/form-fill.js?v=2"></script>
+<script src="templates/form_skus.js?v=1"></script>
 </head>
 <body>
 <main>
@@ -42,10 +43,8 @@ let OUTLETS = {}, SKUS = [], SKU = {}, rows = [];
   renderNav();
   const y = new Date().getFullYear();
   document.getElementById('year').innerHTML = [y, y - 1, y - 2].map(v => `<option>${v}</option>`).join('');
-  const [os, sk] = await Promise.all([
-    fetchAll(() => sb.from('outlets').select('*').order('code')),
-    fetch('templates/form_skus.json?v=1').then(r => r.json())
-  ]);
+  const os = await fetchAll(() => sb.from('outlets').select('*').order('code'));
+  const sk = window.FORM_SKUS || [];
   os.forEach(o => OUTLETS[o.code] = o);
   SKUS = sk; sk.forEach(s => SKU[s.code] = s);
   document.getElementById('year').onchange = load;

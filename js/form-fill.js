@@ -106,7 +106,8 @@ async function editSheet(zip, path, fn) {
 
 /* outlet: row of public.outlets · rows: from formRows() · returns a Blob */
 async function buildOutletForm(outlet, year, rows, skus) {
-  const buf = await fetch('templates/offtake_form.xlsx?v=1').then(r => { if (!r.ok) throw new Error('Template not found'); return r.arrayBuffer(); });
+  if (location.protocol === 'file:') throw new Error('Download form works on the website (vercel.app), not from the file on this computer');
+  const buf = await fetch('templates/offtake_form.xlsx?v=2').then(r => { if (!r.ok) throw new Error('Template not found'); return r.arrayBuffer(); });
   const zip = await JSZip.loadAsync(buf);
   const paths = await sheetPaths(zip);
   const rowOf = {}; skus.forEach(s => rowOf[s.code] = s.row);

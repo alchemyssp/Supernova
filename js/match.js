@@ -8,10 +8,8 @@ const AUTO_SCORE = { customer: 0.62, product: 0.6 };
 const M = { outlets: [], skus: [], OUT: {}, SKU: {}, wsRegion: '' };
 
 async function loadMatchLists() {
-  const [outlets, skus] = await Promise.all([
-    fetchAll(() => sb.from('outlets').select('code, outlet_name, company_name, area, current_bde, bde, status').order('code')),
-    fetch('templates/form_skus.json?v=1').then(r => r.json())
-  ]);
+  const outlets = await fetchAll(() => sb.from('outlets').select('code, outlet_name, company_name, area, region, current_bde, bde, status').order('code'));
+  const skus = window.FORM_SKUS || [];   // templates/form_skus.js
   outlets.forEach(o => {
     o._p = prep(o.outlet_name); o._c = prep(o.company_name);
     o._label = `${o.code} — ${o.outlet_name || ''}${o.area ? ' (' + o.area + ')' : ''}`;

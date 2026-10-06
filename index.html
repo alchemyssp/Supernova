@@ -7,10 +7,10 @@
 <link rel="icon" href="img/supernovas-64.png">
 <link rel="apple-touch-icon" href="img/supernovas-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&family=Noto+Sans+Thai:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/app.css?v=5">
+<link rel="stylesheet" href="css/app.css?v=6">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="js/config.js?v=1"></script>
-<script src="js/common.js?v=5"></script>
+<script src="js/common.js?v=6"></script>
 </head>
 <body class="login">
 <div class="login-box">
@@ -24,7 +24,7 @@
   </div>
 </div>
 <script>
-sb.auth.getSession().then(({ data }) => { if (data.session) location.replace('app.html'); });
+sb.auth.getSession().then(({ data }) => { if (data.session) location.replace('home.html'); });
 async function login() {
   const pass = document.getElementById('passcode').value;
   const msg = document.getElementById('msg'), b = document.getElementById('go');
@@ -33,7 +33,7 @@ async function login() {
   const { error } = await sb.auth.signInWithPassword({ email: SHARED_ACCOUNT_EMAIL, password: pass });
   b.disabled = false; b.textContent = 'Sign in';
   if (error) { msg.textContent = /invalid/i.test(error.message) ? 'Incorrect passcode' : error.message; return; }
-  location.replace('app.html');
+  location.replace('home.html');
 }
 document.getElementById('go').onclick = login;
 document.getElementById('passcode').onkeydown = e => { if (e.key === 'Enter') login(); };

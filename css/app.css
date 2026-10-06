@@ -34,7 +34,40 @@ main { padding: 20px 32px 60px; max-width: 1200px; margin: 0 auto; }
 
 /* top bar with the Supernova's wordmark */
 header.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; max-width: 1200px; margin: 0 auto; padding: 22px 32px 4px; }
-header.top img { height: 54px; border-radius: 14px; background: #F9F8F4; padding: 6px 14px; box-shadow: var(--shadow); }
+header.top img { height: 54px; border-radius: 14px; background: #F9F8F4; padding: 6px 14px; box-shadow: var(--shadow); display: block; }
+header.top .crumb { flex: 1; display: flex; gap: 10px; align-items: center; font-size: 15px; color: var(--muted); }
+header.top .crumb a { color: var(--muted); text-decoration: none; }
+header.top .crumb a:hover { color: var(--text); }
+header.top .crumb b { color: var(--text); font-weight: 400; }
+
+/* home: cards in two rows */
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.tile { display: flex; flex-direction: column; gap: 10px; min-height: 190px; padding: 24px; text-decoration: none; color: var(--text); transition: transform .15s, background .15s; margin: 0; }
+.tile:hover { transform: translateY(-3px); background: var(--glass-2); }
+.tile .ico { width: 46px; height: 46px; border-radius: 14px; background: var(--white); color: var(--ink); display: grid; place-items: center; font-weight: 500; font-size: 15px; box-shadow: 0 6px 16px rgba(0,0,0,.35); }
+.tile h2 { margin: 6px 0 0; }
+.tile p { margin: 0; color: var(--muted); font-size: 13.5px; }
+.tile .stat { margin-top: auto; font-size: 22px; font-weight: 300; }
+.tile .stat small { font-size: 13px; color: var(--muted); }
+@media (max-width: 900px) { .tiles { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 560px) { .tiles { grid-template-columns: 1fr; } }
+
+/* page bits */
+.step { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; }
+.step b.num { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 50%; background: var(--white); color: var(--ink); display: grid; place-items: center; font-weight: 500; box-shadow: 0 4px 12px rgba(0,0,0,.35); }
+.step h2 { margin: 0; }
+.line { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.file-btn { position: relative; overflow: hidden; }
+.file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.sug { display: inline-block; margin: 5px 6px 0 0; padding: 3px 11px; border-radius: 99px; background: var(--glass-2); font-size: 12px; cursor: pointer; border: 0; color: var(--text); }
+.sug:hover { background: var(--white); color: var(--ink); }
+tr.skip td { color: var(--faint); }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+@media (max-width: 1100px) { .two { grid-template-columns: 1fr; } }
+.tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.tabs button { border: 0; background: var(--glass); color: var(--muted); padding: 8px 16px; border-radius: 99px; cursor: pointer; }
+.tabs button.on { background: var(--white); color: var(--ink); }
+input[type=checkbox] { width: 17px; height: 17px; accent-color: #FFFFFF; cursor: pointer; }
 
 /* glass cards */
 .card {
@@ -80,6 +113,7 @@ table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
 th { position: sticky; top: 0; background: #34363C; color: var(--white); text-align: left; font-weight: 500; padding: 10px 12px; white-space: nowrap; z-index: 1; letter-spacing: .2px; }
 td { padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
 td.n, th.n { text-align: right; white-space: nowrap; }
+.nowrap { white-space: nowrap; }
 tr:hover td { background: rgba(255, 255, 255, .03); }
 td input, td select { padding: 7px 12px; font-size: 13.5px; }
 

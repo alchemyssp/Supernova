@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Off-take</title>
+<link rel="icon" href="img/supernovas-64.png">
+<link rel="apple-touch-icon" href="img/supernovas-192.png">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&family=Noto+Sans+Thai:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=6">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="js/config.js?v=1"></script>
+<script src="js/common.js?v=6"></script>
+<script src="js/match.js?v=3"></script>
+<script src="js/form-fill.js?v=4"></script>
+<script src="js/outlet-form.js?v=1"></script>
+<script src="templates/form_skus.js?v=1"></script>
+<style> td.c, th.c { text-align: center; width: 36px; } </style>
+</head>
+<body>
+<main>
+  <h1>Off-take</h1>
+  <p class="sub">One file per outlet: the "Off-Take &amp; Outlet Rebate Calculation" form with all 12 months filled, the claim form (CASH REBATE) and MAPPING to put the % rebate. Several outlets come as one .zip.</p>
+
+  <div class="card">
+    <div class="row">
+      <div style="flex:0 0 140px"><label for="year">Year</label><select id="year"></select></div>
+      <div><label for="bde">Sales (BDE)</label><select id="bde"></select></div>
+      <div style="flex:2 1 240px"><label for="q">Search outlet</label><input type="search" id="q" placeholder="Outlet name, code, area"></div>
+      <div style="flex:0 0 auto"><label>&nbsp;</label><button class="btn" id="export" type="button">Export</button></div>
+    </div>
+    <div class="bar" style="margin-top:12px" hidden id="bar"><i></i></div>
+    <p class="muted" id="info" style="margin:12px 0 0"></p>
+  </div>
+
+  <div class="card">
+    <div class="tbl-wrap"><table id="tbl"></table></div>
+  </div>
+</main>
+<script>
+let rows = [], picked = new Set();
+const SKU = {}; (window.FORM_SKUS || []).forEach(s => SKU[s.code] = s);
+
+(async () => {
+  if (!await requireLogin()) return;
+  pageHeader('Off-take');
+  const y = new Date().getFullYear();
+  document.getElementById('year').innerHTML = [y, y - 1, y - 2].map(v => `<option>${v}</option>`).join('');
+  await loadMatchLists();
+  document.getElementById('year').onchange = load;
+  document.getElementById('bde').onchange = () => { picked.clear(); draw(); };
+  document.getElementById('q').oninput = draw;
+  load();
+})();
+
+const bdeOf = o => o.current_bde || o.bde || '';
+async function load() {
+  const { data, error } = await sb.rpc('form_outlets', { p_year: +document.getElementById('year').value });
+  if (error) return toast(error.message, 'err');
+  const by = {};
+  data.forEach(r => {
+    const x = by[r.outlet_code] = by[r.outlet_code] || { code: r.outlet_code, months: {}, btls: 0 };
+    x.months[+r.month.slice(5, 7)] = +r.btls; x.btls += +r.btls;
+  });
+  rows = Object.values(by).map(r => Object.assign(r, { o: M.OUT[r.code] || { code: r.code } }))
+    .sort((a, b) => String(a.o.outlet_name || a.code).localeCompare(String(b.o.outlet_name || b.code)));
+  const bdes = [...new Set(rows.map(r => bdeOf(r.o)).filter(Boolean))].sort();
+  const s = document.getElementById('bde'), keep = s.value;
+  s.innerHTML = '<option value="">All sales</option>' + bdes.map(b => `<option>${esc(b)}</option>`).join('');
+  if (bdes.includes(keep)) s.value = keep;
+  picked.clear();
+  draw();
+}
+
+function visible() {
+  const bde = document.getElementById('bde').value, q = normKey(document.getElementById('q').value);
+  return rows.filter(r => (!bde || bdeOf(r.o) === bde) && (!q || normKey([r.code, r.o.outlet_name, r.o.company_name, r.o.area].join(' ')).includes(q)));
+}
+function draw() {
+  const list = visible();
+  const allOn = list.length && list.every(r => picked.has(r.code));
+  document.getElementById('tbl').innerHTML =
+    `<tr><th class="c"><input type="checkbox" id="all"${allOn ? ' checked' : ''}></th><th>Outlet</th><th>Code</th><th>BDE</th><th>Area</th>` +
+    MONTHS.map(m => `<th class="n">${m}</th>`).join('') + '<th class="n">Total</th></tr>' +
+    (list.length ? list.map(r => `<tr><td class="c"><input type="checkbox" data-code="${esc(r.code)}"${picked.has(r.code) ? ' checked' : ''}></td>
+      <td>${esc(r.o.outlet_name || '(not in Data U)')}</td><td class="muted nowrap">${esc(r.code)}</td><td>${esc(bdeOf(r.o))}</td><td>${esc(r.o.area || '')}</td>` +
+      MONTHS.map((_, i) => `<td class="n">${fmt0(r.months[i + 1])}</td>`).join('') + `<td class="n"><b>${fmt0(r.btls)}</b></td></tr>`).join('')
+      : '<tr><td colspan="18" class="muted">No outlet has off-take for this choice yet.</td></tr>');
+  document.getElementById('all').onchange = e => { list.forEach(r => e.target.checked ? picked.add(r.code) : picked.delete(r.code)); draw(); };
+  document.querySelectorAll('#tbl input[data-code]').forEach(c => c.onchange = () => { c.checked ? picked.add(c.dataset.code) : picked.delete(c.dataset.code); info(); });
+  info();
+}
+function info() {
+  const n = picked.size, list = visible();
+  document.getElementById('info').textContent = `${fmt0(list.length)} outlets shown · ${fmt0(n)} ticked` + (n ? ` — Export makes ${n === 1 ? '1 Excel file' : n + ' files in one .zip'}` : ' — tick the outlets to export');
+  document.getElementById('export').disabled = !n;
+  document.getElementById('export').textContent = n > 1 ? `Export ${n} outlets` : 'Export';
+}
+
+document.getElementById('export').onclick = async () => {
+  const year = +document.getElementById('year').value, codes = [...picked], bde = document.getElementById('bde').value;
+  const btn = document.getElementById('export'), bar = document.getElementById('bar');
+  btn.disabled = true; bar.hidden = false; bar.firstChild.style.width = '2%';
+  try {
+    let lines = [];
+    for (let i = 0; i < codes.length; i += 40) {
+      const part = codes.slice(i, i + 40);
+      lines = lines.concat(await fetchAll(() => sb.from('form_lines').select('outlet_code, month, wholesaler, price_vat, sku_code, btls, price_per_btl')
+        .in('outlet_code', part).gte('month', year + '-01-01').lte('month', year + '-12-01')));
+    }
+    const zip = codes.length > 1 ? new JSZip() : null;
+    let below = 0;
+    for (let i = 0; i < codes.length; i++) {
+      const code = codes[i], o = M.OUT[code] || { code };
+      btn.textContent = `Preparing ${i + 1} / ${codes.length}…`;
+      const fr = formRows(lines.filter(l => l.outlet_code === code), SKU);
+      below += fr.filter(r => SKU[r.code] && !SKU[r.code].calc).length;
+      const blob = await buildOutletForm(o, year, fr, M.skus);
+      if (zip) zip.file(formFileName(o, year), blob); else saveBlob(blob, formFileName(o, year));
+      bar.firstChild.style.width = (5 + 90 * (i + 1) / codes.length) + '%';
+    }
+    if (zip) saveBlob(await zip.generateAsync({ type: 'blob' }), `Off-Take ${year}${bde ? ' - ' + bde.replace(/[\\/:*?"<>|]/g, ' ') : ''} (${codes.length} outlets).zip`);
+    toast(below ? `Done. Note: ${below} SKU line(s) sit below row 394, where the form does not add them up.` : 'Done', below ? '' : 'ok');
+  } catch (err) { toast('Could not export: ' + err.message, 'err'); }
+  bar.hidden = true; info();
+};
+</script>
+</body>
+</html>

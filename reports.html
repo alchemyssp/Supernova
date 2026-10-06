@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reports &amp; Wholesalers</title>
+<link rel="icon" href="img/supernovas-64.png">
+<link rel="apple-touch-icon" href="img/supernovas-192.png">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&family=Noto+Sans+Thai:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=6">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js?v=1"></script>
+<script src="js/common.js?v=6"></script>
+</head>
+<body>
+<main>
+  <h1>Reports &amp; Wholesalers</h1>
+  <p class="sub">Which WS reports are in for each month, and how each wholesaler's file is read.</p>
+
+  <div class="card">
+    <h2>Bottles by wholesaler and month</h2>
+    <div class="row" style="margin:-4px 0 12px"><div style="flex:0 0 140px"><select id="year"></select></div></div>
+    <div class="tbl-wrap"><table id="grid"></table></div>
+  </div>
+
+  <div class="card">
+    <h2>Reports uploaded</h2>
+    <div class="tbl-wrap" style="max-height:420px"><table id="batches"></table></div>
+  </div>
+
+  <div class="card">
+    <div class="line" style="margin-bottom:12px"><h2 style="margin:0;flex:1">Wholesalers</h2><button class="btn light" id="addWs" type="button">+ Add wholesaler</button></div>
+    <p class="muted" style="margin:-4px 0 12px">"Price in the report": Inc. VAT goes to column K of the form, Ex. VAT to column L.</p>
+    <div class="tbl-wrap"><table id="wTbl"></table></div>
+  </div>
+</main>
+<script>
+let B = [];
+(async () => {
+  if (!await requireLogin()) return;
+  pageHeader('Reports & Wholesalers');
+  const y = new Date().getFullYear();
+  document.getElementById('year').innerHTML = [y, y - 1].map(v => `<option>${v}</option>`).join('');
+  document.getElementById('year').onchange = drawGrid;
+  await loadBatches(); loadWs();
+})();
+
+async function loadBatches() {
+  const { data } = await sb.from('import_batches').select('*').order('month', { ascending: false }).order('wholesaler');
+  B = data || [];
+  document.getElementById('batches').innerHTML = '<tr><th>Month</th><th>Wholesaler</th><th>File</th><th class="n">Lines</th><th class="n">Bottles</th><th>Uploaded</th><th></th></tr>' +
+    (B.length ? B.map(b => `<tr><td>${monthLabel(b.month)}</td><td>${esc(b.wholesaler)}</td><td class="muted">${esc(b.file_name || '')}</td>
+      <td class="n">${fmt0(b.line_count)}</td><td class="n">${fmt0(b.qty)}</td>
+      <td class="muted">${new Date(b.created_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}</td>
+      <td style="white-space:nowrap"><a class="btn small light" href="upload.html?batch=${b.id}" style="text-decoration:none">Identify</a> <button class="btn small gray" data-del="${b.id}">Delete</button></td></tr>`).join('')
+      : '<tr><td colspan="7" class="muted">Nothing uploaded yet.</td></tr>');
+  document.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete this report? Its bottles are taken out of the Off-take.')) return;
+    const { error } = await sb.from('import_batches').delete().eq('id', +b.dataset.del);
+    if (error) return toast(error.message, 'err');
+    toast('Deleted', 'ok'); loadBatches();
+  });
+  drawGrid();
+}
+
+function drawGrid() {
+  const y = document.getElementById('year').value, mine = B.filter(b => b.month.startsWith(y));
+  const names = [...new Set(mine.map(b => b.wholesaler))].sort(), cell = {};
+  mine.forEach(b => cell[b.wholesaler + '|' + +b.month.slice(5, 7)] = b.qty);
+  document.getElementById('grid').innerHTML = '<tr><th>Wholesaler</th>' + MONTHS.map(m => `<th class="n">${m}</th>`).join('') + '</tr>' +
+    (names.length ? names.map(n => `<tr><td>${esc(n)}</td>` + MONTHS.map((_, i) => { const v = cell[n + '|' + (i + 1)]; return v == null ? '<td class="n muted">–</td>' : `<td class="n">${fmt0(v)}</td>`; }).join('') + '</tr>').join('')
+      : `<tr><td colspan="13" class="muted">No report for ${y} yet.</td></tr>`);
+}
+
+async function loadWs() {
+  const { data, error } = await sb.from('wholesalers').select('*').order('name');
+  if (error) return toast(error.message, 'err');
+  const n = {}; B.forEach(b => n[b.wholesaler] = (n[b.wholesaler] || 0) + 1);
+  data.sort((a, b) => (n[b.name] || 0) - (n[a.name] || 0) || a.name.localeCompare(b.name));
+  document.getElementById('wTbl').innerHTML = '<tr><th>Wholesaler</th><th>Region</th><th>Price in the report</th><th>File layout</th><th class="n">Reports</th><th>Show on Upload</th></tr>' +
+    data.map(w => `<tr><td>${esc(w.name)}</td><td>${esc(w.region || '')}</td>
+      <td><select data-n="${esc(w.name)}" class="vat" style="width:auto"><option value="exc"${w.price_vat === 'exc' ? ' selected' : ''}>Ex. VAT → column L</option><option value="inc"${w.price_vat === 'inc' ? ' selected' : ''}>Inc. VAT → column K</option></select></td>
+      <td>${w.config && w.config.layout ? esc(w.config.layout) + ' <button class="link" data-n="' + esc(w.name) + '">read again next time</button>' : '<span class="muted">read on first upload</span>'}</td>
+      <td class="n">${fmt0(n[w.name] || 0)}</td>
+      <td><input type="checkbox" class="act" data-n="${esc(w.name)}"${w.active ? ' checked' : ''}></td></tr>`).join('');
+  const save = async (name, patch) => {
+    const { error } = await sb.from('wholesalers').update(Object.assign({ updated_at: new Date().toISOString() }, patch)).eq('name', name);
+    toast(error ? error.message : 'Saved', error ? 'err' : 'ok');
+  };
+  document.querySelectorAll('#wTbl .vat').forEach(s => s.onchange = () => save(s.dataset.n, { price_vat: s.value }));
+  document.querySelectorAll('#wTbl .act').forEach(c => c.onchange = () => save(c.dataset.n, { active: c.checked }));
+  document.querySelectorAll('#wTbl button.link').forEach(b => b.onclick = async () => { await save(b.dataset.n, { layout: 'table', config: {} }); loadWs(); });
+}
+document.getElementById('addWs').onclick = async () => {
+  const name = (prompt('Wholesaler name, as it should appear in the Wholesaler column of the form') || '').trim();
+  if (!name) return;
+  const { error } = await sb.from('wholesalers').upsert({ name }, { onConflict: 'name', ignoreDuplicates: true });
+  if (error) return toast(error.message, 'err');
+  toast('Added ' + name, 'ok'); loadWs();
+};
+</script>
+</body>
+</html>

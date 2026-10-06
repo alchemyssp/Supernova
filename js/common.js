@@ -9,6 +9,17 @@ async function requireLogin() {
   return data.session;
 }
 
+/* top bar of every page: wordmark (back to Home), where you are, sign out */
+function pageHeader(title) {
+  const h = document.createElement('header');
+  h.className = 'top';
+  h.innerHTML = '<a href="home.html" class="brand"><img src="img/supernovas-wordmark.png" alt="Supernova\'s"></a>' +
+    (title ? `<nav class="crumb"><a href="home.html">Home</a><span>/</span><b>${esc(title)}</b></nav>` : '<span></span>') +
+    '<button class="link" type="button">Sign out</button>';
+  h.querySelector('button').onclick = async () => { await sb.auth.signOut(); location.replace('index.html'); };
+  document.body.prepend(h);
+}
+
 /* ── formatting ── */
 const nf0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const nf2 = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });

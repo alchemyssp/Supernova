@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data U</title>
+<link rel="icon" href="img/supernovas-64.png">
+<link rel="apple-touch-icon" href="img/supernovas-192.png">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&family=Noto+Sans+Thai:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=6">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="js/config.js?v=1"></script>
+<script src="js/common.js?v=6"></script>
+<script src="js/datau.js?v=1"></script>
+</head>
+<body>
+<main>
+  <h1>Data U</h1>
+  <p class="sub">The outlet master used to identify WS customers. Upload the newest "New Data Universe_&lt;date&gt;.xlsm" whenever it changes.</p>
+
+  <div class="grid kpis" id="kpis"></div>
+
+  <div class="card">
+    <div class="line">
+      <span class="muted" id="info" style="flex:1 1 260px">Loading…</span>
+      <label class="btn file-btn">Upload Data U<input type="file" id="file" accept=".xlsx,.xlsm"></label>
+    </div>
+    <p id="msg" class="muted" style="margin:10px 0 0" hidden></p>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:14px">
+      <div style="flex:2 1 260px"><label for="q">Search</label><input type="search" id="q" placeholder="Outlet code, name, company, group"></div>
+      <div><label for="fBde">Current BDE</label><select id="fBde"></select></div>
+      <div><label for="fArea">Area</label><select id="fArea"></select></div>
+      <div><label for="fStatus">Status</label><select id="fStatus"></select></div>
+    </div>
+    <div class="tbl-wrap"><table id="tbl"></table></div>
+    <div class="line" style="margin-top:12px;justify-content:space-between">
+      <span class="muted" id="pageInfo"></span>
+      <span><button class="btn small light" id="prev">Previous</button> <button class="btn small light" id="next">Next</button></span>
+    </div>
+  </div>
+</main>
+<script>
+const COLS = [['code', 'Outlet Code'], ['outlet_name', 'Outlet Name'], ['company_name', 'Company Name'], ['group_name', 'Group'],
+  ['current_bde', 'Current BDE'], ['bde', 'BDE'], ['team', 'Team'], ['area', 'Area'], ['province', 'Province'], ['region', 'Region'], ['status', 'Status'], ['contract', 'Contract']];
+const PAGE = 100;
+let ALL = [], rows = [], page = 0, linked = {};
+
+(async () => {
+  if (!await requireLogin()) return;
+  pageHeader('Data U');
+  await load();
+  ['q', 'fBde', 'fArea', 'fStatus'].forEach(id => document.getElementById(id)[id === 'q' ? 'oninput' : 'onchange'] = () => { page = 0; draw(); });
+  document.getElementById('prev').onclick = () => { page--; draw(); };
+  document.getElementById('next').onclick = () => { page++; draw(); };
+})();
+
+async function load() {
+  const [os, cm] = await Promise.all([
+    fetchAll(() => sb.from('outlets').select('*').order('outlet_name')),
+    fetchAll(() => sb.from('customer_map').select('outlet_code, wholesaler').not('outlet_code', 'is', null))
+  ]);
+  ALL = os; linked = {};
+  cm.forEach(m => (linked[m.outlet_code] = linked[m.outlet_code] || new Set()).add(m.wholesaler));
+  const last = ALL.reduce((a, o) => o.updated_at > a ? o.updated_at : a, '');
+  document.getElementById('info').innerHTML = ALL.length
+    ? `<b>${fmt0(ALL.length)}</b> outlets · last upload ${new Date(last).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}`
+    : '<span class="err">No Data U yet — upload the file.</span>';
+  const opts = (id, key) => {
+    const vals = [...new Set(ALL.map(o => o[key]).filter(Boolean))].sort();
+    document.getElementById(id).innerHTML = '<option value="">All</option>' + vals.map(v => `<option>${esc(v)}</option>`).join('');
+  };
+  opts('fBde', 'current_bde'); opts('fArea', 'area'); opts('fStatus', 'status');
+  const active = ALL.filter(o => /active/i.test(o.status || '') && !/inactive/i.test(o.status || '')).length;
+  document.getElementById('kpis').innerHTML =
+    `<div class="kpi"><small>Outlets</small><b>${fmt0(ALL.length)}</b></div>` +
+    `<div class="kpi"><small>Active</small><b>${fmt0(active)}</b></div>` +
+    `<div class="kpi"><small>Current BDEs</small><b>${fmt0(new Set(ALL.map(o => o.current_bde).filter(Boolean)).size)}</b></div>` +
+    `<div class="kpi"><small>Linked to a WS</small><b>${fmt0(Object.keys(linked).length)}</b></div>`;
+  draw();
+}
+
+function draw() {
+  const q = normKey(document.getElementById('q').value), b = document.getElementById('fBde').value,
+        a = document.getElementById('fArea').value, s = document.getElementById('fStatus').value;
+  rows = ALL.filter(o => (!b || o.current_bde === b) && (!a || o.area === a) && (!s || o.status === s) &&
+    (!q || normKey([o.code, o.outlet_name, o.company_name, o.group_name].join(' ')).includes(q)));
+  const shown = rows.slice(page * PAGE, page * PAGE + PAGE);
+  document.getElementById('tbl').innerHTML = '<tr>' + COLS.map(c => `<th>${c[1]}</th>`).join('') + '<th>Bought via WS</th></tr>' +
+    (shown.length ? shown.map(o => '<tr>' + COLS.map(([k]) => `<td${k === 'code' ? ' class="muted"' : ''}>${esc(o[k])}</td>`).join('') +
+      `<td>${linked[o.code] ? [...linked[o.code]].map(w => `<span class="pill">${esc(w)}</span>`).join(' ') : ''}</td></tr>`).join('')
+      : `<tr><td colspan="${COLS.length + 1}" class="muted">No outlet found.</td></tr>`);
+  document.getElementById('pageInfo').textContent = rows.length ? `${fmt0(page * PAGE + 1)}–${fmt0(Math.min(rows.length, (page + 1) * PAGE))} of ${fmt0(rows.length)}` : '';
+  document.getElementById('prev').disabled = page === 0;
+  document.getElementById('next').disabled = (page + 1) * PAGE >= rows.length;
+}
+
+document.getElementById('file').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  const msg = document.getElementById('msg'); msg.hidden = false;
+  try {
+    msg.textContent = 'Reading ' + f.name + ' (up to a minute)…';
+    await new Promise(r => setTimeout(r, 50));
+    const outlets = readDataU(await f.arrayBuffer());
+    if (!outlets.length) throw new Error('no outlets found (sheets "Outlet" / "Filter")');
+    const now = new Date().toISOString(); outlets.forEach(o => o.updated_at = now);
+    await writeChunks('outlets', outlets, { onConflict: 'code' }, (n, t) => msg.textContent = `Saving ${fmt0(n)} / ${fmt0(t)} outlets…`);
+    msg.textContent = `Done — ${fmt0(outlets.length)} outlets from ${f.name}.`;
+    page = 0; await load();
+  } catch (err) { msg.textContent = 'Stopped: ' + err.message; }
+};
+</script>
+</body>
+</html>

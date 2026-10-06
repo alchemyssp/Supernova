@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supernova Off-take</title>
+<link rel="icon" href="img/supernovas-64.png">
+<link rel="apple-touch-icon" href="img/supernovas-192.png">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500&family=Noto+Sans+Thai:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=6">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js?v=1"></script>
+<script src="js/common.js?v=6"></script>
+</head>
+<body>
+<main>
+  <h1>Off-take from wholesaler reports</h1>
+  <p class="sub">Upload the WS reports of the month, tell which Data U outlet each customer is once, export the Off-take form of each outlet.</p>
+  <div class="tiles">
+    <a class="card tile" href="datau.html"><span class="ico">DU</span><h2>Data U</h2><p>Outlet master from the Data Universe file — upload the latest one here.</p><span class="stat" id="sDu">…</span></a>
+    <a class="card tile" href="upload.html"><span class="ico">WS</span><h2>Upload WS Report</h2><p>Read a wholesaler's report, then identify its outlets and products.</p><span class="stat" id="sUp">…</span></a>
+    <a class="card tile" href="offtake.html"><span class="ico">OT</span><h2>Off-take</h2><p>One file per outlet with all 12 months, the claim form and MAPPING for % rebate.</p><span class="stat" id="sOt">…</span></a>
+    <a class="card tile" href="wsdb.html#outlets"><span class="ico">OL</span><h2>WS Outlet Database</h2><p>Each WS customer name linked to its Data U Outlet Code and Outlet Name.</p><span class="stat" id="sOl">…</span></a>
+    <a class="card tile" href="wsdb.html#products"><span class="ico">PR</span><h2>WS Product Database</h2><p>Each WS product name linked to the SKU of the form.</p><span class="stat" id="sPr">…</span></a>
+    <a class="card tile" href="reports.html"><span class="ico">RP</span><h2>Reports &amp; Wholesalers</h2><p>Reports uploaded per month, and how each WS price is read (Inc. / Ex. VAT).</p><span class="stat" id="sRp">…</span></a>
+  </div>
+</main>
+<script>
+(async () => {
+  if (!await requireLogin()) return;
+  pageHeader('');
+  const n = async (t, f) => { let q = sb.from(t).select('*', { count: 'exact', head: true }); if (f) q = f(q); const { count } = await q; return count || 0; };
+  const year = new Date().getFullYear();
+  const [du, ol, pr, rp, last, ot] = await Promise.all([
+    n('outlets'),
+    n('customer_map', q => q.not('outlet_code', 'is', null)),
+    n('product_map', q => q.not('sku_code', 'is', null)),
+    n('import_batches'),
+    sb.from('import_batches').select('wholesaler, month').order('created_at', { ascending: false }).limit(1),
+    sb.rpc('form_outlets', { p_year: year })
+  ]);
+  const set = (id, h) => document.getElementById(id).innerHTML = h;
+  set('sDu', `${fmt0(du)} <small>outlets</small>`);
+  set('sUp', last.data && last.data[0] ? `${esc(last.data[0].wholesaler)} <small>· ${monthLabel(last.data[0].month)} last</small>` : '<small>Nothing uploaded yet</small>');
+  set('sOt', `${fmt0(new Set((ot.data || []).map(r => r.outlet_code)).size)} <small>outlets in ${year}</small>`);
+  set('sOl', `${fmt0(ol)} <small>names linked</small>`);
+  set('sPr', `${fmt0(pr)} <small>names linked</small>`);
+  set('sRp', `${fmt0(rp)} <small>reports</small>`);
+})();
+</script>
+</body>
+</html>
